@@ -1,0 +1,4 @@
+<!-- Supabase Auth 邮件模板：Magic Link（已注册的邮箱用验证码登录 / 忘记密码时发这封；只放 TokenHash 链接） L-3：RedirectTo 必须 urlquery 编码；前端 emailRedirectTo 直接用 SITE + '/store' 或 SITE + '/reset-password' -->
+<h2>登录验证</h2>
+<p>点击下面的按钮继续（15 分钟内有效）。如果不是你本人操作，请忽略这封邮件，你的密码不会改变。</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo | urlquery }}">继续</a></p>

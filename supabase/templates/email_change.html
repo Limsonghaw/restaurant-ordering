@@ -1,0 +1,4 @@
+<!-- Supabase Auth 邮件模板：Change email address（rereview-2 L-3 补齐；只放 TokenHash 链接，不放 Token 数字码）。第一版前端不提供改邮箱 / 改手机号（M-4），这封只为防止默认模板带数字码 -->
+<h2>确认新的邮箱</h2>
+<p>点击下面的按钮确认把账号邮箱改为 {{ .NewEmail }}（15 分钟内有效）。如果不是你本人操作，请忽略这封邮件并尽快联系平台。</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email_change&next={{ .RedirectTo | urlquery }}">确认新邮箱</a></p>

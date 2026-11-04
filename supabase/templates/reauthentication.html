@@ -1,0 +1,5 @@
+<!-- Supabase Auth 邮件模板：Reauthentication（rereview-2 L-3 补齐）。本项目不调用 supabase.auth.reauthenticate()：
+     重新验证一律走「忘记密码」流程（A4 → A6）。这封不放 Token 数字码（注释里也不能写模板变量，否则会被渲染进邮件源码），避免多出一个可被猜测的邮箱验证码入口（M-N4） -->
+<h2>需要重新验证</h2>
+<p>为了账号安全，请回到网站，在登录页点「忘记密码」重新收取验证邮件后再修改密码。</p>
+<p><a href="{{ .SiteURL }}/forgot-password">前往重新验证</a></p>

@@ -1,0 +1,4 @@
+<!-- Supabase Auth 邮件模板：Reset password。v8 的前端不再调用 resetPasswordForEmail，保留这封以防误用；只放 TokenHash 链接 -->
+<h2>重设密码</h2>
+<p>点击下面的按钮重设密码（15 分钟内有效）。如果不是你本人操作，请忽略这封邮件。</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password">重设密码</a></p>
