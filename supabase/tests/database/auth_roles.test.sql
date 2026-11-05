@@ -6,6 +6,10 @@
 --       INSERT 时已验证也擦密码、首次验证删除已有会话、店家读不到 stores.status_reason。crypt / gen_salt 写全 extensions.
 -- rereview-3 低-6：H-1 再补两条（店家读不到 blocked_clients.value_hash、不能直接 delete 拉黑记录），共 25 条。
 begin;
+-- The CLI connects as postgres, which is not a superuser in the local stack.
+-- Test-only membership permits SET ROLE; ROLLBACK removes these grants.
+-- Statements under test still run with the target role's own privileges / RLS.
+grant supabase_auth_admin to postgres;
 create extension if not exists pgtap with schema extensions;
 select plan(25);
 

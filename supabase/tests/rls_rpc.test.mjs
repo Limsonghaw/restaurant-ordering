@@ -5,9 +5,9 @@ import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 const db = new PGlite();
 const M = new URL('../migrations/', import.meta.url).pathname;
-const stub = fs.readFileSync(new URL('./supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
+const stub = fs.readFileSync(new URL('../test-support/supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
 await db.exec(stub);
-await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
+await db.exec(fs.readFileSync(new URL('../test-support/supabase_stub_rereview.sql', import.meta.url), 'utf8'));
 for (const f of fs.readdirSync(M).filter(f => f.endsWith('.sql')).sort()) await db.exec(fs.readFileSync(M + f, 'utf8'));
 console.log('MIGRATIONS OK');
 

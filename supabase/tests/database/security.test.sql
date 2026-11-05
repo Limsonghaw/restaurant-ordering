@@ -1,5 +1,9 @@
 -- Integration checks against the actual Supabase roles, after ALL migrations.
 begin;
+-- The CLI connects as postgres, which is not a superuser in the local stack.
+-- Test-only membership permits SET ROLE; ROLLBACK removes these grants.
+-- Statements under test still run with the target role's own privileges / RLS.
+grant customer_api, authenticated, anon to postgres;
 create extension if not exists pgtap with schema extensions;
 select plan(21);
 

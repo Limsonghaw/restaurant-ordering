@@ -6,9 +6,9 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 const db = new PGlite();
 const M = new URL('../migrations/', import.meta.url).pathname;
-const stub = fs.readFileSync(new URL('./supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
+const stub = fs.readFileSync(new URL('../test-support/supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
 await db.exec(stub);
-await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
+await db.exec(fs.readFileSync(new URL('../test-support/supabase_stub_rereview.sql', import.meta.url), 'utf8'));
 for (const f of ['0001_init.sql', '0002_rpc.sql', '0003_security_rereview.sql', '0004_frontend_alignment.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'));
 console.log('MIGRATIONS OK (0001 + 0002 + 0003 + 0004)');
 
