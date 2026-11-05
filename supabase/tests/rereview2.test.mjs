@@ -10,6 +10,7 @@ await db.exec(stub);
 await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
 for (const f of ['0001_init.sql', '0002_rpc.sql', '0003_security_rereview.sql', '0004_frontend_alignment.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'));
 
+await db.exec(fs.readFileSync(M + '0006_idempotency_device_binding.sql', 'utf8'));
 let pass = 0, fail = 0;
 const q = async (sql, p = []) => (await db.query(sql, p)).rows;
 const report = (good, label, extra = '') => { good ? pass++ : fail++; console.log(good ? 'PASS' : 'FAIL', label, extra); };

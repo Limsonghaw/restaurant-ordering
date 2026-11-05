@@ -35,6 +35,8 @@ const legacy = await newOwner('legacy@x.com');
 const SL = await storeOf(legacy);
 await q(`update stores set status='suspended', status_reason='旧原因：多次投诉', status_changed_at=now() where id=$1`, [SL]);
 await db.exec(fs.readFileSync(M + '0004_frontend_alignment.sql', 'utf8'));
+await db.exec(fs.readFileSync(M + '0005_purge_resend_boundary.sql', 'utf8'));
+await db.exec(fs.readFileSync(M + '0006_idempotency_device_binding.sql', 'utf8'));
 console.log('MIGRATIONS OK (0001 + 0002 + 0003 + 0004)');
 
 // ================= H-1 / Q3 停用原因对店家隐藏（rereview-2 隐藏方案） 【待安全顾问复查】 =================

@@ -1,4 +1,4 @@
-// 本地快速验证：npm i -D @electric-sql/pglite && node supabase/tests/rls_rpc.test.mjs
+// 本地快速验证：npm ci && npm run test:db:unit（全部迁移）
 // PGlite + supabase_stub.sql 模拟 auth / storage / realtime / 角色 / 平台默认权限。正式 CI 用 supabase start + pgTAP（见 implementation-plan.md）。
 import { PGlite } from '@electric-sql/pglite';
 import { createHash, randomUUID } from 'crypto';
@@ -7,8 +7,8 @@ const db = new PGlite();
 const M = new URL('../migrations/', import.meta.url).pathname;
 const stub = fs.readFileSync(new URL('./supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
 await db.exec(stub);
-await db.exec(fs.readFileSync(M + '0001_init.sql', 'utf8'));
-await db.exec(fs.readFileSync(M + '0002_rpc.sql', 'utf8'));
+await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
+for (const f of fs.readdirSync(M).filter(f => f.endsWith('.sql')).sort()) await db.exec(fs.readFileSync(M + f, 'utf8'));
 console.log('MIGRATIONS OK');
 
 let pass = 0, fail = 0;
@@ -23,7 +23,7 @@ const asClaims = async (role, claims, fn) => {
   await db.exec(`select set_config('request.jwt.claims', '${JSON.stringify(claims)}', false); set role ${role};`);
   try { return await fn(); } finally { await db.exec(`reset role; select set_config('request.jwt.claims', '', false); select set_config('realtime.topic', '', false);`); }
 };
-const asUser = (uid, fn) => asClaims('authenticated', { sub: uid, role: 'authenticated' }, fn);
+const asUser = (uid, fn) => asClaims('authenticated', { sub: uid, role: 'authenticated', aal: 'aal2' }, fn);
 const asCustomer = fn => asClaims('customer_api', { role: 'customer_api' }, fn);
 const asAnon = fn => asClaims('anon', { role: 'anon' }, fn);
 const H = s => createHash('sha256').update(String(s)).digest('hex');
@@ -39,7 +39,7 @@ await q(`update auth.users set email_confirmed_at=now() where id=$1`, [ub.id]);
 const [uanon] = await q(`insert into auth.users(is_anonymous, email_confirmed_at) values (true, now()) returning id`);
 const [sa] = await q(`select store_id from store_members where user_id=$1`, [ua.id]);
 const [sb] = await q(`select store_id from store_members where user_id=$1`, [ub.id]);
-ok('注册即验证（autoconfirm 插入）建店，店名取 store_name', sa && (await q(`select name from stores where id=$1`, [sa.store_id]))[0].name === 'A 店');
+ok('注册即验证（autoconfirm 插入）建店，店名一律「我的餐厅」（PR1b：L-5 不采用 store_name）', sa && (await q(`select name from stores where id=$1`, [sa.store_id]))[0].name === '我的餐厅');
 ok('M5 邮箱验证后建店（默认店名）', sb && (await q(`select name from stores where id=$1`, [sb.store_id]))[0].name === '我的餐厅');
 ok('M5 邮箱渠道记为 email', (await q(`select signup_channel from profiles where user_id=$1`, [ub.id]))[0].signup_channel === 'email');
 ok('匿名用户不建店', (await memberCount(uanon.id)) === 0);
@@ -72,8 +72,8 @@ const fnList = (role) => q(`select p.proname from pg_proc p where p.pronamespace
 ok('H2 anon 不能执行 public/private 任何函数', (await fnList('anon')).length === 0, JSON.stringify(await fnList('anon')));
 const authFns = (await fnList('authenticated')).map(r => r.proname);
 const expectedAuth = ['admin_list_stores','admin_set_store_status','block_client_from_order','calc_bill','can_write_store','delete_category','div_round',
-  'get_store_daily_stats','is_platform_admin','is_store_member','mark_bill_paid','reorder_categories','reorder_items','rotate_table_qr',
-  'soft_delete_item','soft_delete_table','try_uuid','update_order_status'];
+  'ensure_my_store','get_my_context','get_store_daily_stats','is_platform_admin','is_store_member','list_blocked_clients','mark_bill_paid',
+  'reorder_categories','reorder_items','rotate_table_qr','soft_delete_item','soft_delete_table','try_uuid','unblock_client','update_order_status'];   // PR1b：+0004 的 4 个函数
 ok('H2 authenticated 只能执行白名单函数', JSON.stringify(authFns) === JSON.stringify(expectedAuth), JSON.stringify(authFns));
 const custFns = (await fnList('customer_api')).map(r => r.proname);
 ok('M7 customer_api 只能执行 4 个 customer_*', JSON.stringify(custFns) === JSON.stringify(['customer_get_bill','customer_get_menu','customer_place_order','customer_quote']), JSON.stringify(custFns));
@@ -98,7 +98,7 @@ ok('L3 public/private 所有函数都设置了 search_path', (await q(`select p.
 // ---------- 跨店隔离 ----------
 await asUser(ub.id, async () => {
   ok('B 读不到 A 的菜品', (await q(`select * from items where store_id=$1`, [SA])).length === 0);
-  ok('B 读不到 A 的店铺', (await q(`select * from stores where id=$1`, [SA])).length === 0);
+  ok('B 读不到 A 的店铺', (await q(`select id from stores where id=$1`, [SA])).length === 0);   // PR1b：stores 列级授权后不能 select *（H-1）
   ok('B 改不了 A 的菜品', (await q(`update items set price_cents=1 where id=$1 returning id`, [A.i1])).length === 0);
   await expectErr('B 不能往 A 店插数据', 'new row violates row-level security policy for table "categories"', () => q(`insert into categories(store_id,name) values ($1,'x')`, [SA]));
   await expectErr('authenticated 不能调 customer_place_order', 'permission denied for function customer_place_order', () => q(`select customer_place_order(null,null,1,null,null,null,null,null,null,null)`));
@@ -129,6 +129,9 @@ ok('首单开账单并签发令牌', o1.order.seq_in_bill === 1 && o1.order.subt
 ok('下单响应不含任何指纹字段', !JSON.stringify(o1).includes('hash'));
 const rep = await place({ rid: rid(1), items: [L(A.i1, 2, 1250, '少辣')], tok: T1 });
 ok('重复 request_id 返回原单（replayed=true）', rep.replayed === true && rep.order.id === o1.order.id && rep.bill_token_issued === false);
+await expectErr('跨设备重放统一拒绝', 'IDEMPOTENCY_KEY_REUSED', () => place({ rid: rid(1), dev: 'attacker', items: [L(A.i1, 2, 1250, '少辣')] }));
+await expectErr('同设备跨桌重放统一拒绝', 'IDEMPOTENCY_KEY_REUSED', () => place({ rid: rid(1), table: A.t.X, items: [L(A.i1, 2, 1250, '少辣')] }));
+ok('拒绝重放后原令牌仍可用', (await getBill(T1)).bill.id === o1.bill.id);
 const T1b = H('tok-reissue');
 const rep2 = await place({ rid: rid(1), items: [L(A.i1, 2, 1250, '少辣')], tok: null, newTok: T1b });
 ok('重放时本设备没收到令牌 → 重新下发', rep2.replayed === true && rep2.bill_token_issued === true);
@@ -246,7 +249,7 @@ await asUser(ua.id, async () => { await q(`select set_config('realtime.topic',$1
 let n = 100;
 for (let i = 0; i < 10; i++) await place({ rid: rid(n++), table: A.t.X, items: [L(A.i2, 1, 530)], dev: 'dX' + i, ip: 'I9' });
 for (let i = 0; i < 10; i++) await place({ rid: rid(n++), table: A.t.Y, items: [L(A.i2, 1, 530)], dev: 'dY' + i, ip: 'I9' });
-await expectErr('M3 同店同 IP 10 分钟第 21 单 → RATE_LIMITED(ip_db)', 'RATE_LIMITED', () => place({ rid: rid(n++), table: A.t.Z, items: [L(A.i2, 1, 530)], dev: 'dZ', ip: 'I9' }), 'ip_db');
+await expectErr('M3 同店同 IP 10 分钟第 21 单 → CAPTCHA_REQUIRED(ip_db)（M-N3 后）', 'CAPTCHA_REQUIRED', () => place({ rid: rid(n++), table: A.t.Z, items: [L(A.i2, 1, 530)], dev: 'dZ', ip: 'I9' }), 'ip_db');
 await expectErr('同桌 10 分钟第 11 单 → RATE_LIMITED(table_db)', 'RATE_LIMITED', () => place({ rid: rid(n++), table: A.t.X, items: [L(A.i2, 1, 530)], dev: 'dX-new', ip: 'I8' }), 'table_db');
 for (let i = 0; i < 10; i++) await place({ rid: rid(n++), table: A.t.W1, items: [L(A.i2, 1, 530)], dev: 'DV', ip: 'IV' + i });
 await expectErr('M3 同店同设备 10 分钟第 11 单 → RATE_LIMITED(device_db)', 'RATE_LIMITED', () => place({ rid: rid(n++), table: A.t.W2, items: [L(A.i2, 1, 530)], dev: 'DV', ip: 'IV-new' }), 'device_db');

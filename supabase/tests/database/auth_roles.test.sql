@@ -38,9 +38,13 @@ select isnt((select password_set_at from public.profiles where user_id = '111111
 select ok(has_function_privilege('supabase_auth_admin', 'private.hook_before_user_created(jsonb)', 'execute'), 'supabase_auth_admin 能执行 hook');
 select ok(not has_function_privilege('anon', 'private.hook_before_user_created(jsonb)', 'execute'), 'anon 不能执行 hook');
 select ok(not has_function_privilege('authenticated', 'private.hook_before_user_created(jsonb)', 'execute'), 'authenticated 不能执行 hook');
+-- Run the hook as GoTrue, then assert as postgres: pgTAP itself is not an application grant.
+create temp table hook_result (result jsonb);
+grant insert on hook_result to supabase_auth_admin;
 set local role supabase_auth_admin;
-select is(private.hook_before_user_created('{"user":{"phone":"6591234567"}}') -> 'error' ->> 'message', 'PHONE_NOT_SUPPORTED', 'hook 拒绝非马来西亚号码');
+insert into hook_result values (private.hook_before_user_created('{"user":{"phone":"6591234567"}}'));
 reset role;
+select is((select result -> 'error' ->> 'message' from hook_result), 'PHONE_NOT_SUPPORTED', 'hook 拒绝非马来西亚号码');
 
 -- 5. customer_api 登录角色
 select ok((select rolcanlogin from pg_roles where rolname = 'customer_api'), 'customer_api 可登录');

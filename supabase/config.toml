@@ -1,0 +1,70 @@
+# Local baseline only. Never `supabase config push` to production.
+# Production: verify Dashboard hook/templates/CAPTCHA, confirmation requirements,
+# exact /store and /reset-password redirects, and absence of test OTPs before signup.
+project_id = "restaurant-ordering"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/store", "http://localhost:3000/reset-password"]
+enable_signup = true
+enable_anonymous_sign_ins = false
+minimum_password_length = 8
+password_requirements = "letters_digits"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+double_confirm_changes = true
+secure_password_change = true
+max_frequency = "1m"
+otp_length = 8
+otp_expiry = 900
+
+[auth.sms]
+# SMS stays disabled locally until a provider is configured; no test OTPs.
+enable_signup = false
+enable_confirmations = true
+max_frequency = "60s"
+
+[auth.rate_limit]
+sms_sent = 20
+email_sent = 30
+sign_in_sign_ups = 15
+token_verifications = 15
+
+[auth.hook.before_user_created]
+enabled = true
+uri = "pg-functions://postgres/private/hook_before_user_created"
+
+# Enable in production Dashboard with an externally supplied secret.
+# Local database CI uses `supabase start -x ...` and needs no Auth secrets.
+[auth.captcha]
+enabled = false
+provider = "turnstile"
+
+[auth.email.template.confirmation]
+content_path = "./supabase/templates/confirmation.html"
+[auth.email.template.magic_link]
+content_path = "./supabase/templates/magic_link.html"
+[auth.email.template.recovery]
+content_path = "./supabase/templates/recovery.html"
+[auth.email.template.email_change]
+content_path = "./supabase/templates/email_change.html"
+[auth.email.template.reauthentication]
+content_path = "./supabase/templates/reauthentication.html"
