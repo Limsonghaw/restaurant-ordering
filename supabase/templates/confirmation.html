@@ -1,0 +1,4 @@
+<!-- Supabase Auth 邮件模板：Confirm signup（M-N4：只放 TokenHash 链接，不放 Token 数字码（注释里也不能写模板变量，否则会被渲染进邮件源码）） L-3：RedirectTo 必须 urlquery 编码；前端 emailRedirectTo 直接用 SITE + '/store' 或 SITE + '/reset-password' -->
+<h2>确认你的邮箱</h2>
+<p>点击下面的按钮完成注册验证（15 分钟内有效）。如果不是你本人操作，请忽略这封邮件。</p>
+<p><a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo | urlquery }}">确认邮箱</a></p>
