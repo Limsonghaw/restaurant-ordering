@@ -1,17 +1,19 @@
 // 第二轮安全复查（0003_security_rereview.sql）验收断言；PR1b 的最终状态（叠加 0004）下运行
 // 本地：npm i -D @electric-sql/pglite && node supabase/tests/rereview.test.mjs
-// 加载顺序：supabase_stub.sql → supabase_stub_rereview.sql → 0001 → 0002 → 0003。PR1 的 rls_rpc.test.mjs 仍只测 0001 + 0002。
+// 加载桩与全部迁移；rls_rpc.test.mjs 同样覆盖全部迁移。
 import { PGlite } from '@electric-sql/pglite';
 import { createHash } from 'crypto';
 import fs from 'fs';
 const db = new PGlite();
 const M = new URL('../migrations/', import.meta.url).pathname;
-const stub = fs.readFileSync(new URL('./supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
+const stub = fs.readFileSync(new URL('../test-support/supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
 await db.exec(stub);
-await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
+await db.exec(fs.readFileSync(new URL('../test-support/supabase_stub_rereview.sql', import.meta.url), 'utf8'));
 for (const f of ['0001_init.sql', '0002_rpc.sql', '0003_security_rereview.sql', '0004_frontend_alignment.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'));
 console.log('MIGRATIONS OK (0001 + 0002 + 0003 + 0004)');
 
+await db.exec(fs.readFileSync(M + '0005_purge_resend_boundary.sql', 'utf8'));
+await db.exec(fs.readFileSync(M + '0006_idempotency_device_binding.sql', 'utf8'));
 let pass = 0, fail = 0;
 const q = async (sql, p = []) => (await db.query(sql, p)).rows;
 const report = (good, label, extra = '') => { good ? pass++ : fail++; console.log(good ? 'PASS' : 'FAIL', label, extra); };

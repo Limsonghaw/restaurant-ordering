@@ -1,15 +1,54 @@
 import type { NextConfig } from "next";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 
-const testKeys = [
-  "1x00000000000000000000AA",
-  "2x00000000000000000000AB",
-  "3x00000000000000000000FF",
-];
-if (
-  process.env.VERCEL_ENV === "production" &&
-  testKeys.includes(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "")
-) {
-  throw new Error("生产环境禁止使用 Turnstile 测试 site key");
+const supabaseOrigin = process.env.NEXT_PUBLIC_SUPABASE_URL
+  ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin
+  : "https://*.supabase.co";
+const csp = [
+  "default-src 'self'",
+  // Next.js hydration uses inline scripts; development also needs eval.
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""} https://challenges.cloudflare.com`,
+  "style-src 'self' 'unsafe-inline'",
+  `img-src 'self' data: blob: ${supabaseOrigin}`,
+  "font-src 'self'",
+  `connect-src 'self' ${supabaseOrigin} ${supabaseOrigin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}`,
+  "frame-src https://challenges.cloudflare.com",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: csp },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
+  },
+};
+export default function config(phase: string): NextConfig {
+  const dataSource = process.env.NEXT_PUBLIC_DATA_SOURCE;
+  if (dataSource !== "mock" && dataSource !== "supabase") {
+    throw new Error("NEXT_PUBLIC_DATA_SOURCE 必须明确设置为 mock 或 supabase");
+  }
+  if (process.env.VERCEL_ENV === "production" && dataSource !== "supabase") {
+    throw new Error("正式站点必须使用 NEXT_PUBLIC_DATA_SOURCE=supabase");
+  }
+  const isProduction =
+    phase === PHASE_PRODUCTION_BUILD ||
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL_ENV === "production";
+  const siteKey = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "").trim();
+  if (isProduction && (!siteKey || /^[123]x0{20}[A-Z]{2}$/.test(siteKey))) {
+    throw new Error("生产环境必须配置正式 Turnstile site key（禁止空值和测试 key）");
+  }
+  return nextConfig;
 }
-const nextConfig: NextConfig = {};
-export default nextConfig;
