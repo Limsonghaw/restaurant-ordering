@@ -13,11 +13,19 @@ set local role postgres;
 create extension if not exists pgtap with schema extensions;
 select plan(25);
 
+-- Compute password fixtures as postgres; GoTrue only needs to read the hashes.
+create temp table test_hashes (name text, hash text);
+insert into test_hashes (name, hash) values
+  ('victim', extensions.crypt('attacker-pass', extensions.gen_salt('bf'))),
+  ('owner', extensions.crypt('owner-pass-1', extensions.gen_salt('bf'))),
+  ('autoconfirm', extensions.crypt('attacker-pass', extensions.gen_salt('bf')));
+grant select on test_hashes to supabase_auth_admin;
+
 -- 1. GoTrue 的真实身份插入未验证用户（带密码，模拟抢注）
 set local role supabase_auth_admin;
 insert into auth.users (instance_id, id, aud, role, email, encrypted_password, raw_user_meta_data, raw_app_meta_data, created_at, updated_at)
 values ('00000000-0000-0000-0000-000000000000', '11111111-1111-4111-8111-111111111111', 'authenticated', 'authenticated',
-        'pgtap-victim@example.com', extensions.crypt('attacker-pass', extensions.gen_salt('bf')), '{"store_name":"pgTAP 店"}', '{"provider":"email"}', now(), now());
+        'pgtap-victim@example.com', (select hash from pg_temp.test_hashes where name = 'victim'), '{"store_name":"pgTAP 店"}', '{"provider":"email"}', now(), now());
 -- L-1：模拟一条已有会话（正常不会出现；auth.sessions 的必填列以真实项目为准，需确认）
 insert into auth.sessions (id, user_id, created_at, updated_at) values (gen_random_uuid(), '11111111-1111-4111-8111-111111111111', now(), now());
 set local role postgres;
@@ -34,7 +42,7 @@ select is((select count(*)::int from auth.sessions where user_id = '11111111-111
 
 -- 3. 已验证后设密码 → 记录 password_set_at
 set local role supabase_auth_admin;
-update auth.users set encrypted_password = extensions.crypt('owner-pass-1', extensions.gen_salt('bf')) where id = '11111111-1111-4111-8111-111111111111';
+update auth.users set encrypted_password = (select hash from pg_temp.test_hashes where name = 'owner') where id = '11111111-1111-4111-8111-111111111111';
 set local role postgres;
 select isnt((select password_set_at from public.profiles where user_id = '11111111-1111-4111-8111-111111111111'), null, '设密码后记录 password_set_at');
 
@@ -63,7 +71,7 @@ select ok((select rolconfig from pg_roles where rolname = 'customer_api') @> arr
 set local role supabase_auth_admin;
 insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, created_at, updated_at)
 values ('00000000-0000-0000-0000-000000000000', '22222222-2222-4222-8222-222222222222', 'authenticated', 'authenticated',
-        'pgtap-autoconfirm@example.com', extensions.crypt('attacker-pass', extensions.gen_salt('bf')), now(), '{"provider":"email"}', now(), now());
+        'pgtap-autoconfirm@example.com', (select hash from pg_temp.test_hashes where name = 'autoconfirm'), now(), '{"provider":"email"}', now(), now());
 set local role postgres;
 select is((select coalesce(encrypted_password, '') from auth.users where id = '22222222-2222-4222-8222-222222222222'), '', 'M-3 插入即验证也擦密码');
 select is((select password_set_at from public.profiles where user_id = '22222222-2222-4222-8222-222222222222'), null, 'M-3 插入即验证不记 password_set_at');
