@@ -16,9 +16,14 @@ import { Button, Modal, Toggle } from "./common";
 import { orderScenariosA, scenarioLabelsA } from "./mock-panel-a";
 export function MockPanel() {
   const path = usePathname();
-  const code = path.startsWith("/t/")
-    ? decodeURIComponent(path.split("/")[2])
-    : "demo-a1";
+  let code = "demo-a1";
+  if (isMock && path.startsWith("/t/")) {
+    try {
+      code = decodeURIComponent(path.split("/")[2]);
+    } catch {
+      code = "";
+    }
+  }
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<MockSnapshot>();
   const [error, setError] = useState("");

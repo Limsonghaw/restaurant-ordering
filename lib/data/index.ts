@@ -6,7 +6,7 @@ import * as mockSession from "./mock/session";
 import * as realSession from "./supabase/session";
 import * as mockControls from "./mock/controls-a";
 import * as realControls from "./supabase/controls-a";
-export const isMock = process.env.NEXT_PUBLIC_DATA_SOURCE !== "supabase";
+export const isMock = process.env.NEXT_PUBLIC_DATA_SOURCE === "mock";
 export const { getTableMenu, quoteCart, imageUrl } = isMock
   ? mockMenu
   : realMenu;

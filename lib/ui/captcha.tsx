@@ -46,7 +46,7 @@ export function Captcha({
     callbacks.current = { onToken, onExpire, onReset };
   });
   const [checked, setChecked] = useState(false);
-  const key = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+  const key = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "").trim();
   useEffect(() => {
     let cancelled = false;
     let widget: string | undefined;
@@ -73,6 +73,8 @@ export function Captcha({
   }, [key, resetKey]);
   return key ? (
     <div ref={container} />
+  ) : process.env.NEXT_PUBLIC_DATA_SOURCE !== "mock" ? (
+    <p role="alert">验证组件未配置</p>
   ) : (
     <div className="captcha" key={resetKey}>
       <p>人机验证（假数据占位）</p>
