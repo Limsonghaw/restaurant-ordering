@@ -1,0 +1,9 @@
+import { OrdersPage } from "@/lib/ui/customer";
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ code: string }>;
+}) {
+  const { code } = await params;
+  return <OrdersPage code={code} />;
+}

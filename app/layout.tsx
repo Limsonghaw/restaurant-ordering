@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { MockPanel } from "@/lib/ui/mock-panel";
 
 export const metadata: Metadata = {
   title: "餐厅扫码点餐",
@@ -10,7 +11,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-Hans">
-      <body>{children}</body>
+      <body>
+        {children}
+        <MockPanel />
+      </body>
     </html>
   );
 }

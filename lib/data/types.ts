@@ -1,0 +1,242 @@
+// 字段对齐阶段 1 后端设计文档（更新 7、更新 8），后端改动时同步；只追加、不改名。
+export type StoreStatus = "active" | "suspended" | "pending_review";
+export interface MyStoreSummary {
+  id: string;
+  slug: string;
+  name: string;
+  logo_path: string | null;
+  status: StoreStatus;
+  status_changed_at: string | null;
+  is_accepting_orders: boolean;
+  is_profile_complete: boolean;
+}
+export interface MyContext {
+  user_id: string;
+  platform_role: "merchant" | "platform_admin" | null;
+  aal: "aal1" | "aal2";
+  password_set: boolean;
+  password_set_at: string | null;
+  member_role: "owner" | "staff" | null;
+  store: MyStoreSummary | null;
+}
+export interface BlockedClientRow {
+  id: string;
+  kind: "device" | "ip";
+  reason: string;
+  created_at: string;
+  expires_at: string;
+  is_active: boolean;
+  source_order: {
+    id: string;
+    seq_in_bill: number;
+    table_label: string;
+    subtotal_cents: number;
+    created_at: string;
+  } | null;
+}
+export type BillGoneReason = "bill_paid" | "qr_rotated" | "expired";
+export interface QuoteEstimate {
+  estimate_basis: "this_order";
+  service_charge_bp: number;
+  sst_bp: number;
+  estimated_service_charge_cents: number | null;
+  estimated_sst_cents: number | null;
+  estimated_rounding_cents: number | null;
+  estimated_total_cents: number | null;
+}
+export type ErrorCode =
+  | "TABLE_INVALID"
+  | "STORE_SUSPENDED"
+  | "RATE_LIMITED"
+  | "NETWORK"
+  | "NOT_IMPLEMENTED"
+  | "PRICE_CHANGED"
+  | "ITEM_UNAVAILABLE"
+  | "STORE_CLOSED"
+  | "ORDER_LIMIT_EXCEEDED"
+  | "IDEMPOTENCY_KEY_REUSED"
+  | "DEVICE_BLOCKED"
+  | "CAPTCHA_REQUIRED"
+  | "CAPTCHA_FAILED"
+  | "BILL_TOKEN_EXPIRED"
+  | "BILL_TOKEN_INVALID"
+  | "MFA_REQUIRED"
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "VALIDATION_FAILED"
+  | "CATEGORY_NOT_EMPTY";
+export class DataError extends Error {
+  constructor(
+    public code: ErrorCode,
+    message: string,
+    public details: Record<string, unknown> = {},
+    public status = 400,
+    public retryAfterSeconds = 0,
+  ) {
+    super(message);
+    this.name = "DataError";
+  }
+}
+export interface Store extends MyStoreSummary {
+  address: string;
+  opening_hours: string;
+  currency: "MYR";
+  locale: string;
+  timezone: string;
+  service_charge_bp: number;
+  sst_bp: number;
+  cash_rounding: boolean;
+  require_first_order_approval: boolean;
+  max_order_cents: number;
+  require_captcha: boolean;
+  created_at: string;
+  updated_at: string;
+}
+export interface Category {
+  id: string;
+  name: string;
+  sort_order: number;
+}
+export interface MenuItem {
+  id: string;
+  category_id: string;
+  name: string;
+  description: string;
+  price_cents: number;
+  image_path: string | null;
+  thumb_path: string | null;
+  is_sold_out: boolean;
+  sort_order: number;
+}
+export interface TableMenu {
+  store: Pick<
+    Store,
+    | "id"
+    | "name"
+    | "logo_path"
+    | "address"
+    | "opening_hours"
+    | "is_accepting_orders"
+    | "currency"
+    | "service_charge_bp"
+    | "sst_bp"
+  >;
+  table: { id: string; label: string };
+  categories: Category[];
+  items: MenuItem[];
+  table_in_use: boolean;
+}
+export interface CartItem {
+  item_id: string;
+  quantity: number;
+  unit_price_cents: number;
+  note: string;
+}
+export interface OrderLine {
+  item_name: string;
+  unit_price_cents: number;
+  quantity: number;
+  line_total_cents: number;
+  note: string;
+}
+export interface QuoteLine extends OrderLine {
+  line_no: number;
+  item_id: string;
+}
+export interface Unavailable {
+  item_id: string;
+  reason: "sold_out" | "unavailable";
+  name: string;
+}
+export interface PriceChange {
+  item_id: string;
+  name: string;
+  client_unit_price_cents: number;
+  current_unit_price_cents: number;
+}
+export interface CartQuote extends QuoteEstimate {
+  can_order: boolean;
+  is_accepting_orders: boolean;
+  limit_exceeded: boolean;
+  lines: QuoteLine[];
+  item_count: number;
+  subtotal_cents: number;
+  unavailable: Unavailable[];
+  price_changes: PriceChange[];
+  max_order_cents: number;
+}
+export type OrderStatus = "new" | "accepted" | "served" | "cancelled";
+export type CancelReason =
+  "sold_out" | "customer_request" | "duplicate" | "other";
+export interface Order {
+  id: string;
+  seq_in_bill: number;
+  status: OrderStatus;
+  subtotal_cents: number;
+  item_count: number;
+  created_at: string;
+  cancel_reason: CancelReason | null;
+  lines: OrderLine[];
+}
+export interface PlaceOrderBody {
+  client_request_id: string;
+  items: CartItem[];
+  captcha_token?: string;
+}
+export interface PlaceOrderResult {
+  replayed: boolean;
+  bill_token_issued: boolean;
+  order: Order;
+  bill: { id: string; status: "open" | "paid" };
+}
+export interface BillAmounts {
+  subtotal_cents: number;
+  service_charge_cents: number;
+  sst_cents: number;
+  rounding_cents: number;
+  total_cents: number;
+}
+export type TableBill =
+  | {
+      view: "table";
+      table_in_use: boolean;
+      bill: null;
+      orders: [];
+      poll_after_ms: null;
+    }
+  | {
+      view: "bill";
+      scope: "own_orders";
+      store: { name: string; is_accepting_orders: boolean };
+      table: { label: string };
+      bill: BillAmounts & {
+        id: string;
+        status: "open" | "paid";
+        opened_at: string;
+        paid_at: string | null;
+        currency: "MYR";
+        token_expires_at: string;
+        amounts_basis: "own_orders";
+        is_estimate: true;
+      };
+      orders: Order[];
+      poll_after_ms: number;
+    };
+export type Session = MyContext & {
+  user: { id: string; email: string | null; phone: string | null };
+};
+export interface MockSettings {
+  slow: boolean;
+  fail_next: boolean;
+  next_order: string;
+  captcha_fail: boolean;
+  auto_progress: boolean;
+}
+export interface MockSnapshot {
+  settings: MockSettings;
+  demo_codes: string[];
+  identity: string;
+}
+export type MockAction =
+  "paid" | "rotate" | "expire" | "switch_device" | "reset" | "suspend";
