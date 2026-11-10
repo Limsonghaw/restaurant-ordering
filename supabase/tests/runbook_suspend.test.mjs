@@ -4,13 +4,15 @@ import { PGlite } from '@electric-sql/pglite';
 import fs from 'fs';
 const db = new PGlite();
 const M = new URL('../migrations/', import.meta.url).pathname;
-const stub = fs.readFileSync(new URL('./supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
+const stub = fs.readFileSync(new URL('../test-support/supabase_stub.sql', import.meta.url), 'utf8').replace('grant anon, authenticated, service_role to postgres;', '');
 await db.exec(stub);
-await db.exec(fs.readFileSync(new URL('./supabase_stub_rereview.sql', import.meta.url), 'utf8'));
+await db.exec(fs.readFileSync(new URL('../test-support/supabase_stub_rereview.sql', import.meta.url), 'utf8'));
 for (const f of ['0001_init.sql', '0002_rpc.sql', '0003_security_rereview.sql', '0004_frontend_alignment.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'));
 const md = fs.readFileSync(new URL('../../docs/runbook-emergency-suspend-store.md', import.meta.url), 'utf8');
 const blocks = Object.fromEntries([...md.matchAll(/```sql\n-- RUNBOOK:(\w+)[^\n]*\n([\s\S]*?)```/g)].map(m => [m[1], m[2]]));
 
+await db.exec(fs.readFileSync(M + '0005_purge_resend_boundary.sql', 'utf8'));
+await db.exec(fs.readFileSync(M + '0006_idempotency_device_binding.sql', 'utf8'));
 let pass = 0, fail = 0;
 const q = async (sql, p = []) => (await db.query(sql, p)).rows;
 const report = (good, label, extra = '') => { good ? pass++ : fail++; console.log(good ? 'PASS' : 'FAIL', label, extra); };
