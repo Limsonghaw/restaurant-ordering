@@ -19,6 +19,34 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - name: Build supabase production
+        run: npm run build
+        env:
+          VERCEL_ENV: production
+          NEXT_PUBLIC_DATA_SOURCE: supabase
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: placeholder-site-key
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+      - name: Check production artifacts for mock code
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok/;
+          function check(directory) {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const path = join(directory, entry.name);
+              if (entry.isDirectory()) check(path);
+              else if (/\.(js|html)$/.test(entry.name) && forbidden.test(readFileSync(path, 'utf8'))) {
+                throw new Error(`Mock code found in ${path}`);
+              }
+            }
+          }
+          check('.next/static');
+          check('.next/server/app');
+          NODE
+      - name: Clear production build before mock build
+        run: rm -rf .next
       - run: npm run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://supabase.example.invalid
