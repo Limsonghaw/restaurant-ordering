@@ -1,10 +1,16 @@
+import Link from "next/link";
+import { routes } from "@/lib/routes";
 export default function Home() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stone-50 px-6 text-stone-900">
-      <div className="text-center">
-        <h1 className="text-3xl font-semibold">餐厅扫码点餐</h1>
-        <p className="mt-4 text-stone-600">多店点餐服务，建设中。</p>
-      </div>
+    <main className="full-message">
+      <h1>餐厅扫码点餐</h1>
+      <p className="muted">欢迎来到假数据预览</p>
+      <Link className="button primary" href={routes.menu("demo-a1")}>
+        进入示范茶餐室
+      </Link>
+      <Link className="button text" href={routes.store}>
+        店家后台
+      </Link>
     </main>
   );
 }

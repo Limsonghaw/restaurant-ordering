@@ -51,3 +51,13 @@ npm run format
 ## PR 规则
 
 所有变更只开 PR，是否合并由负责人决定，禁止自行合并。密钥只放环境变量，绝不进入仓库或提交信息；不提交真实服务地址、token 或任何凭据。参考资料中的公开文档链接保持原样。提交前必须通过 CI 对应的全部检查。
+
+## PR-A 假数据预览
+
+从 `/t/demo-a1` 开始；空桌为 `/t/demo-a2`，零费率 `/t/demo-b1`，暂停接单 `/t/demo-paused`，停用店铺 `/t/demo-suspended`，无效桌码 `/t/demo-a9`。店家框架从 `/store` 进入。界面只通过 `lib/data/index.ts` 调用数据，`lib/data/types.ts` 是后续 PR 共享的追加式类型合约。
+
+`NEXT_PUBLIC_DATA_SOURCE=mock` 为默认；改成 `supabase` 后需重启或重新构建，目前会显示「未实现」，不会请求 Supabase。mock 只在浏览器运行，以 `ro-mock:` 存状态，以 `cart:{code}` 分桌保存购物车。右下「假数据」支持延迟、错误、验证码、自动推进、结账、重置桌码、过期和换手机；「重置全部假数据」会清除这些演示状态和购物车。模拟设备和令牌仅在数据层内部使用，页面无需读取。无真实账号密码。
+
+验证码 site key 留空时不加载外部脚本，使用勾选占位。设置公开 site key 后才按需加载官方 Turnstile；三种公开测试 key 见 `.env.example`，`VERCEL_ENV=production` 禁止测试 key。每次提交后都重置验证码；真实校验归后端负责。
+
+公共组件位于 `lib/ui/common.tsx`，验证码位于 `lib/ui/captcha.tsx`，后台框架 `StoreShell` 支持 `banners` 叠放和 `newOrderCount` 角标。后续模拟项按 `lib/ui/mock-panel-a.ts`、`lib/data/mock/controls-a.ts` 的领域文件方式追加。金额和时间统一使用 `lib/format.ts`；金额只在 mock 内部计价，页面展示数据层返回值。

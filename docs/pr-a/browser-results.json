@@ -1,0 +1,15 @@
+{
+  "price_message_retained": true,
+  "cart_price_updated": true,
+  "price_reconfirmation": true,
+  "hidden_no_poll": false,
+  "visible_immediate_refresh": true,
+  "gone_stops_polling": true,
+  "expired_refresh_no_orders": true,
+  "layout_1024": true,
+  "store_1024": true,
+  "layout_1280": true,
+  "store_1280": true,
+  "store_suspended_banner": true,
+  "page_errors": []
+}
