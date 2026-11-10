@@ -1,15 +1,15 @@
 -- pgTAP：真实 Supabase 角色下的执行身份（L-N7）。本地 PGlite 跑不了，在 `supabase start` 后执行：
---   supabase test db          （CLI 会运行 supabase/tests/database/*.test.sql）
+--   npm run test:db           （此套件用本地 supabase_admin 连接）
 -- 覆盖：supabase_auth_admin 写 auth.users 时触发器能建店、首次验证清空密码、hook 的执行权限、
 --       customer_api 登录角色、pg_cron 定时任务已注册、legacy 角色切换已撤销。
 -- PR1b 补强（rereview-2 L-8、M-3、L-1、H-1）：customer_api 连接数与两个超时、purge 不删已验证账号、
 --       INSERT 时已验证也擦密码、首次验证删除已有会话、店家读不到 stores.status_reason。crypt / gen_salt 写全 extensions.
 -- rereview-3 低-6：H-1 再补两条（店家读不到 blocked_clients.value_hash、不能直接 delete 拉黑记录），共 25 条。
 begin;
--- The CLI connects as postgres, which is not a superuser in the local stack.
--- Test-only membership permits SET ROLE; ROLLBACK removes these grants.
--- Statements under test still run with the target role's own privileges / RLS.
-grant supabase_auth_admin to postgres;
+-- The runner connects as local supabase_admin only to allow SET ROLE without
+-- granting reserved role memberships. All setup/assertions still run as postgres;
+-- GoTrue statements explicitly switch to supabase_auth_admin with its own privileges.
+set local role postgres;
 create extension if not exists pgtap with schema extensions;
 select plan(25);
 
@@ -20,13 +20,13 @@ values ('00000000-0000-0000-0000-000000000000', '11111111-1111-4111-8111-1111111
         'pgtap-victim@example.com', extensions.crypt('attacker-pass', extensions.gen_salt('bf')), '{"store_name":"pgTAP 店"}', '{"provider":"email"}', now(), now());
 -- L-1：模拟一条已有会话（正常不会出现；auth.sessions 的必填列以真实项目为准，需确认）
 insert into auth.sessions (id, user_id, created_at, updated_at) values (gen_random_uuid(), '11111111-1111-4111-8111-111111111111', now(), now());
-reset role;
+set local role postgres;
 select is((select count(*)::int from public.store_members where user_id = '11111111-1111-4111-8111-111111111111'), 0, '未验证不建店');
 
 -- 2. 以 supabase_auth_admin 验证 → 建店 + 清空密码
 set local role supabase_auth_admin;
 update auth.users set email_confirmed_at = now() where id = '11111111-1111-4111-8111-111111111111';
-reset role;
+set local role postgres;
 select is((select count(*)::int from public.store_members where user_id = '11111111-1111-4111-8111-111111111111'), 1, 'supabase_auth_admin 验证后触发器建店');
 select is((select coalesce(encrypted_password, '') from auth.users where id = '11111111-1111-4111-8111-111111111111'), '', '首次验证清空注册时的密码');
 select is((select password_set_at from public.profiles where user_id = '11111111-1111-4111-8111-111111111111'), null, 'password_set_at 为空');
@@ -35,7 +35,7 @@ select is((select count(*)::int from auth.sessions where user_id = '11111111-111
 -- 3. 已验证后设密码 → 记录 password_set_at
 set local role supabase_auth_admin;
 update auth.users set encrypted_password = extensions.crypt('owner-pass-1', extensions.gen_salt('bf')) where id = '11111111-1111-4111-8111-111111111111';
-reset role;
+set local role postgres;
 select isnt((select password_set_at from public.profiles where user_id = '11111111-1111-4111-8111-111111111111'), null, '设密码后记录 password_set_at');
 
 -- 4. hook 权限
@@ -47,7 +47,7 @@ create temp table hook_result (result jsonb);
 grant insert on hook_result to supabase_auth_admin;
 set local role supabase_auth_admin;
 insert into hook_result values (private.hook_before_user_created('{"user":{"phone":"6591234567"}}'));
-reset role;
+set local role postgres;
 select is((select result -> 'error' ->> 'message' from hook_result), 'PHONE_NOT_SUPPORTED', 'hook 拒绝非马来西亚号码');
 
 -- 5. customer_api 登录角色
@@ -64,7 +64,7 @@ set local role supabase_auth_admin;
 insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, created_at, updated_at)
 values ('00000000-0000-0000-0000-000000000000', '22222222-2222-4222-8222-222222222222', 'authenticated', 'authenticated',
         'pgtap-autoconfirm@example.com', extensions.crypt('attacker-pass', extensions.gen_salt('bf')), now(), '{"provider":"email"}', now(), now());
-reset role;
+set local role postgres;
 select is((select coalesce(encrypted_password, '') from auth.users where id = '22222222-2222-4222-8222-222222222222'), '', 'M-3 插入即验证也擦密码');
 select is((select password_set_at from public.profiles where user_id = '22222222-2222-4222-8222-222222222222'), null, 'M-3 插入即验证不记 password_set_at');
 
