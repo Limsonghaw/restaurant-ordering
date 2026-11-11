@@ -18,7 +18,6 @@ function database() {
     ssl: "require",
     idle_timeout: 20,
     connect_timeout: 5,
-    connection: { options: "-c statement_timeout=3000" },
   }));
 }
 export function mapCustomerError(error: unknown): AppError {
@@ -67,6 +66,15 @@ export function mapCustomerError(error: unknown): AppError {
         ].includes(raw.scope)
       )
         details.scope = raw.scope;
+      if (
+        code === "RATE_LIMITED" &&
+        typeof raw.retry_after_seconds === "number" &&
+        Number.isFinite(raw.retry_after_seconds)
+      )
+        details.retry_after_seconds = Math.max(
+          1,
+          Math.ceil(raw.retry_after_seconds),
+        );
       if (Object.keys(details).length) Object.assign(result, { details });
     } catch {
       /* discard malformed details */
@@ -110,11 +118,43 @@ export interface PlaceArgs extends TableCode {
   new_bill_token_hash: string;
   captcha_verified: boolean;
 }
+function placeQuery(db: ReturnType<typeof postgres>, a: PlaceArgs) {
+  return db`select public.customer_place_order(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${db.json(a.items)}, ${a.device_hash}, ${a.ip_hash}, ${a.bill_token_hash}, ${a.new_bill_token_hash}, ${a.captcha_verified}) as result`;
+}
 export const customerPlaceOrder = (a: PlaceArgs) =>
-  call<PlaceOrderResult>(
-    (db) =>
-      db`select public.customer_place_order(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${db.json(a.items)}, ${a.device_hash}, ${a.ip_hash}, ${a.bill_token_hash}, ${a.new_bill_token_hash}, ${a.captcha_verified}) as result`,
-  );
+  call<PlaceOrderResult>((db) => placeQuery(db, a));
+
+// Probe using the existing least-privilege RPC, never granting direct table access.
+// Commit ONLY a database-confirmed replay, including legitimate token recovery.
+// Unknown IDs always roll back: no order, token, realtime event or quota is persisted.
+export async function customerReplayOrder(
+  a: PlaceArgs,
+): Promise<PlaceOrderResult | null> {
+  const rollback = new Error("Replay probe rollback");
+  let result: PlaceOrderResult | null = null;
+  try {
+    await database().begin(async (tx) => {
+      const rows = await placeQuery(
+        tx as unknown as ReturnType<typeof postgres>,
+        {
+          ...a,
+          captcha_verified: false,
+        },
+      );
+      const candidate = rows[0].result as PlaceOrderResult;
+      if (candidate.replayed !== true) throw rollback;
+      // The RPC checks current QR, store, table, device and request content first.
+      result = candidate;
+    });
+    return result;
+  } catch (error) {
+    if (error === rollback) return null;
+    // Business rejections are not evidence of replay. Continue through ALL limits.
+    const mapped = mapCustomerError(error);
+    if (mapped.code === "INTERNAL") throw mapped;
+    return null;
+  }
+}
 export const customerGetBill = (
   a: TableCode,
   token: string | null,

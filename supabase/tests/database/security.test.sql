@@ -5,7 +5,7 @@ begin;
 -- Statements under test still run with the target role's own privileges / RLS.
 grant customer_api, authenticated, anon to postgres;
 create extension if not exists pgtap with schema extensions;
-select plan(87);
+select plan(111);
 
 insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data)
 values ('aaaa0000-0000-4000-8000-000000000001', 'security-a@example.invalid', now(), '{}'),
@@ -137,5 +137,84 @@ from (values
 ) as functions(signature);
 select throws_ok($assert$select pg_temp.as_role('customer_api', $$create temp table l9_forbidden(id integer)$$)$assert$,
  '42501', null, 'customer_api cannot create temporary tables');
+-- PR4 / 0008: isolated bill fixtures, customer calls retain least privilege.
+-- Clear prior merchant JWT before postgres fixture maintenance.
+select set_config('request.jwt.claims', '{"role":"postgres"}', true);
+create temp table qr_fixture as select store_id, gen_random_uuid() t, gen_random_uuid() u,
+ gen_random_uuid() bt, gen_random_uuid() bu from fixture;
+grant select on qr_fixture to customer_api;
+insert into public.dining_tables(id,store_id,label)
+select t,store_id,'qr-T' from qr_fixture union all select u,store_id,'qr-U' from qr_fixture;
+insert into public.bills(id,store_id,table_id)
+select bt,store_id,t from qr_fixture union all select bu,store_id,u from qr_fixture;
+insert into public.bill_access_tokens(bill_id,store_id,token_hash,device_hash,scope)
+select bt,store_id,repeat('1',64),repeat('a',64),'own_orders' from qr_fixture union all
+select bu,store_id,repeat('2',64),repeat('a',64),'own_orders' from qr_fixture;
+create function pg_temp.qr_bill(v integer,k text default repeat('1',64),d text default repeat('a',64))
+returns jsonb language sql as $$
+ select public.customer_get_bill(store_id,t,v,k,d) from qr_fixture
+$$;
+grant execute on function pg_temp.qr_bill(integer,text,text) to customer_api;
+create function pg_temp.qr_error(v integer,k text default repeat('1',64),d text default repeat('a',64))
+returns text language plpgsql as $$
+begin
+ perform pg_temp.as_role('customer_api',format('select pg_temp.qr_bill(%L,%L,%L)',v,k,d));
+ return 'unexpected success';
+exception when sqlstate 'P0001' then
+ return sqlerrm;
+end $$;
+create function pg_temp.qr_reason(v integer) returns text language plpgsql as $$
+declare detail text;
+begin
+ perform pg_temp.as_role('customer_api',format('select pg_temp.qr_bill(%L)',v));
+ return 'unexpected success';
+exception when sqlstate 'P0001' then
+ get stacked diagnostics detail = pg_exception_detail;
+ return sqlerrm||':'||(detail::jsonb->>'reason');
+end $$;
+
+-- Same two operations as rotate_table_qr; preserve first revocation.
+update public.dining_tables set qr_version=2 where id=(select t from qr_fixture);
+select private.revoke_bill_tokens(null,(select t from qr_fixture),'qr_rotated');
+select is(pg_temp.qr_reason(1),'BILL_TOKEN_EXPIRED:qr_rotated','0008 #1 old version returns qr_rotated');
+select is(pg_temp.qr_error(1,null),'TABLE_INVALID','0008 #2 no token');
+select is(pg_temp.qr_error(1,repeat('1',64),repeat('b',64)),'TABLE_INVALID','0008 #3 other device');
+select is(pg_temp.qr_error(1,repeat('2',64)),'TABLE_INVALID','0008 #4 other table old version');
+select is(pg_temp.qr_error(2,repeat('2',64)),'BILL_TOKEN_INVALID','0008 #5 other table current version');
+insert into public.bill_access_tokens(bill_id,store_id,token_hash,device_hash,scope)
+select bt,store_id,repeat('3',64),repeat('a',64),'own_orders' from qr_fixture;
+select is(pg_temp.as_role('customer_api', $$select pg_temp.qr_bill(2,repeat('3',64))$$)::jsonb->>'view','bill','0008 #6 new token works');
+select is(pg_temp.qr_error(1,repeat('3',64)),'TABLE_INVALID','0008 #7 new token on old page');
+select ok((select revoked_at is null from public.bill_access_tokens where token_hash=repeat('3',64)),'0008 #7 new token survives');
+select private.revoke_bill_tokens(null,(select t from qr_fixture),'bill_paid');
+select is(pg_temp.qr_reason(1),'BILL_TOKEN_EXPIRED:qr_rotated','0008 #9 rotation before payment');
+update public.bill_access_tokens set revoked_at=null,revoked_reason=null,expires_at=now()+interval '1 day' where token_hash in (repeat('1',64),repeat('3',64));
+update public.dining_tables set qr_version=1,deleted_at=null where id=(select t from qr_fixture);
+update public.stores set status='active' where id=(select store_id from qr_fixture);
+select private.revoke_bill_tokens(null,(select t from qr_fixture),'bill_paid');
+update public.dining_tables set qr_version=2 where id=(select t from qr_fixture);
+select private.revoke_bill_tokens(null,(select t from qr_fixture),'qr_rotated');
+select is(pg_temp.qr_reason(1),'BILL_TOKEN_EXPIRED:bill_paid','0008 #8 payment before rotation');
+update public.bill_access_tokens set revoked_at=null,revoked_reason=null,expires_at=now()+interval '1 day' where token_hash in (repeat('1',64),repeat('3',64));
+update public.dining_tables set qr_version=1,deleted_at=null where id=(select t from qr_fixture);
+update public.stores set status='active' where id=(select store_id from qr_fixture);
+update public.dining_tables set qr_version=2 where id=(select t from qr_fixture);
+update public.bill_access_tokens set expires_at=now()-interval '1 second' where token_hash=repeat('1',64);
+select is(pg_temp.qr_reason(1),'BILL_TOKEN_EXPIRED:expired','0008 #10 expired old version');
+select is(pg_temp.qr_reason(2),'BILL_TOKEN_EXPIRED:expired','0008 #11 expired current version');
+update public.stores set status='suspended' where id=(select store_id from qr_fixture);
+select is(pg_temp.qr_error(v,k),'STORE_SUSPENDED','0008 #12 suspension precedence')
+from (values (1),(2)) versions(v) cross join (values (null::text),(repeat('1',64))) tokens(k);
+update public.dining_tables set deleted_at=now() where id=(select t from qr_fixture);
+select is(pg_temp.qr_error(1),'TABLE_INVALID','0008 #13 deleted table');
+update public.bill_access_tokens set revoked_at=null,revoked_reason=null,expires_at=now()+interval '1 day' where token_hash in (repeat('1',64),repeat('3',64));
+update public.dining_tables set qr_version=1,deleted_at=null where id=(select t from qr_fixture);
+update public.stores set status='active' where id=(select store_id from qr_fixture);
+select ok('statement_timeout=3s'=any(proconfig),'0008 #14 timeout') from pg_proc where oid='public.customer_get_bill(uuid,uuid,integer,text,text)'::regprocedure;
+select ok('search_path=""'=any(proconfig),'0008 #14 empty search path') from pg_proc where oid='public.customer_get_bill(uuid,uuid,integer,text,text)'::regprocedure;
+select ok(prosecdef,'0008 #14 security definer') from pg_proc where oid='public.customer_get_bill(uuid,uuid,integer,text,text)'::regprocedure;
+select is(has_function_privilege(r,'public.customer_get_bill(uuid,uuid,integer,text,text)','execute'),r='customer_api','0008 #14 execute '||r)
+from (values ('customer_api'),('anon'),('authenticated'),('service_role')) roles(r);
+
 select * from finish();
 rollback;
