@@ -67,6 +67,35 @@ npx supabase start
 
 请使用完整的 `npx supabase start`，不要照抄 CI 数据库作业里的 `supabase start -x …`。CI 会排除 Auth、Realtime、Storage、Mailpit、Studio 等容器，那些排除项只为跑数据库测试；本地联调需要这些服务（注册邮件、实时订单、图片存储）。
 
+### 端口默认对外可访问，请改成只让本机连接
+
+本仓库锁定的 Supabase CLI **2.122.1** 在 `npx supabase start` 成功时会打印安全提示：所有服务绑在 `0.0.0.0` 上，不只是 localhost，因此同一局域网里的其它设备可能连得上本机的 API（`54321`）、Postgres（`54322`）以及 Studio、Mailpit 等一并发布的端口。CLI 把端口写成 `-p 主机端口:容器端口`，没有写成 `127.0.0.1:…`。本地库还使用共享默认密钥，Studio 等界面也没有额外认证，不要在不可信的网络（例如公共 Wi-Fi）上默认这么跑。
+
+`config.toml` 只能改端口号，没有「只绑定 127.0.0.1」的选项。下面是已在官方文档或 CLI 2.122.1 源码里核对过的做法。
+
+**1. 推荐：Docker Desktop 的默认绑定设置（4.52 起）**
+
+Docker Desktop 官方说明：`docker run -p` 默认听在所有网卡（`0.0.0.0`）上，但可以在 Docker Desktop 的 Network 设置里改成默认只绑定 `localhost`（`127.0.0.1`）。4.52.0 起增加了端口绑定设置；发布说明里对应的界面名称是 **Localhost by default** 或 **Localhost only**。管理员也可以在 Settings Management 里配置 `portBindingBehavior`（`default-local-port-binding` 或更严格的 `local-only-port-binding`）。这是针对 Linux 容器的设置，会影响本机所有已发布的容器端口，不单是 Supabase。
+
+步骤：
+
+1. 确认 Docker Desktop 版本至少为 4.52（「About Docker Desktop」或 [发布说明](https://docs.docker.com/desktop/release-notes/#4520)）。
+2. 打开 Docker Desktop → Settings → Network，把端口绑定设为 **Localhost only**（若没有该项，则用 **Localhost by default**）。
+3. 保存设置。若 Docker Desktop 提示需要重启引擎或应用，按提示操作。
+4. 在仓库根目录执行 `npx supabase stop`，再执行 `npx supabase start`，让容器按新的默认绑定重新发布端口。改设置前已经在跑的容器不会自动改绑定。
+
+改完后，`docker ps` 里这些端口应显示为 `127.0.0.1:54321`、`127.0.0.1:54322`（以及 `[::1]`），而不是 `0.0.0.0:…`。前端仍用 `http://localhost:3000` 即可。
+
+**2. Windows 防火墙**
+
+Docker Desktop 官方说明：容器的入站连接会经过主机上的 `com.docker.backend.exe`，可以用 Windows Defender Firewall 或企业防火墙对该进程允许或拒绝入站。官方文档没有给出「只允许本机访问 54321/54322」的逐步规则，本文不编写具体命令。若要用防火墙作补充，请按上述官方说明自行配置，并在改完后验证局域网内其它设备已连不上这些端口。
+
+**3. CLI 的 `--network-id`**
+
+CLI 2.122.1 有全局参数 `--network-id`，让 `npx supabase start` 使用你预先创建的 Docker 网络，而不是它自动生成的网络。Docker Engine 文档还说明：创建自定义 bridge 网络时可加上 `com.docker.network.bridge.host_binding_ipv4=127.0.0.1`，未指定主机地址的 `-p` 就会默认绑到回环地址。这两段都是官方或源码里有的，但 **Docker Desktop for Windows 的官方文档没有确认该组合在 Desktop 上一定生效**（Desktop 通过自己的后端转发已发布端口），因此这里不把它当作 Windows + Docker Desktop 的推荐做法。
+
+若 Docker Desktop 低于 4.52、找不到上述设置，或无法确认端口已改绑到 `127.0.0.1`，请只在可信的网络里运行本地栈，用完后执行 `npx supabase stop`。
+
 `npx supabase start` 会自动应用 `supabase/migrations/` 下的迁移，当前为：
 
 - `0001_init.sql`
@@ -109,14 +138,16 @@ npx supabase db reset --local
 npm run db:local-customer-password
 ```
 
-脚本会生成一段只含十六进制字符的随机密码（也可用环境变量 `CUSTOMER_API_PASSWORD` 指定，同样只能是字母或数字），在本地库执行 `alter role customer_api`，并把 `CUSTOMER_API_DATABASE_URL` 写进本机 `.env.local`（该文件已被 gitignore，不要提交）。若还没有 `.env.local`，终端会打印连接串，请自行拷入，不要贴到聊天或提交。
+脚本会生成一段只含十六进制字符的随机密码（也可用环境变量 `CUSTOMER_API_PASSWORD` 指定，同样只能是字母或数字），把 SQL 从标准输入交给 `npx supabase db query --local`（密码不会出现在命令行参数里），并把 `CUSTOMER_API_DATABASE_URL` 写进本机 `.env.local`（该文件已被 gitignore，不要提交）。脚本不会在终端打印连接串或密码。若还没有 `.env.local`，请先按第 5 节复制 `.env.example` 再重新执行，不要让脚本把密钥打到屏幕上。
 
 也可以手动设置：
 
 ```powershell
 $customerApiPassword = node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-$customerApiPassword
-npx supabase db query --local "alter role customer_api with password '$customerApiPassword';"
+# 把 SQL 从标准输入传入，避免密码出现在命令行参数里
+@"
+alter role customer_api with password '$customerApiPassword';
+"@ | npx supabase db query --local
 ```
 
 把终端里打印出的密码稍后填进 `.env.local`。也可以用 `npx supabase status` 给出的超级用户 DB URL，用 psql 连上后执行 `\password customer_api`（只发送 SCRAM 校验值）。不要把 service_role 密钥或超级用户连接串写进应用的 `.env.local`。
@@ -248,6 +279,7 @@ npx supabase db reset --local
 | --- | --- |
 | `docker version` 没有 Server / `npx supabase start` 说 Docker 未运行 | 先启动 Docker Desktop，等到 Running。确认安装时选了 WSL2。 |
 | `npx supabase start` 端口被占用 | `54321`（API）或 `54322`（Postgres）已被占用。结束占用进程，或先 `npx supabase stop`。 |
+| 局域网里其它设备能连上 `54321` / `54322` | CLI 默认把服务绑在 `0.0.0.0`。按第 4 节把 Docker Desktop（4.52 起）的端口绑定设为 Localhost only 或 Localhost by default，保存后再重新 `npx supabase start`。找不到该设置时，只在可信网络运行，用完执行 `npx supabase stop`。 |
 | `npx supabase --version` 不是 2.122.1 | 先在仓库根目录执行 `npm ci`，不要用全局旧版 `supabase`。 |
 | 连接顾客库失败、SSL 报错 | 本地应为 `CUSTOMER_DB_SSL=disable`，URL 主机为 `127.0.0.1` 或 `localhost`。若误用了 `npm start` 或设置了 `VERCEL_ENV` / `NODE_ENV=production`，进程会直接拒绝该开关。 |
 | `Missing database configuration` | 未设 `CUSTOMER_API_DATABASE_URL`。 |
