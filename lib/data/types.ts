@@ -402,3 +402,10 @@ export interface StoreHistory {
 export type StoreMockActionD = "empty" | "many_bills" | "restore";
 
 export interface StoreBillFilters { table_id?: string; paid_date?: string }
+
+// PR-D bill_overview metadata (append only; older paid snapshots may omit it).
+export interface StoreBillRow {
+  order_count?: number;
+  unserved_count?: number;
+  is_estimate?: boolean;
+}

@@ -70,7 +70,15 @@ function overview(
   m: MetaD,
   b: InternalBill,
 ): StoreBillRow {
-  if (b.status === "paid" && m.paid[b.id]) return m.paid[b.id];
+  const counts = {
+    order_count: b.orders.length,
+    unserved_count: b.orders.filter(
+      (o) => o.status === "new" || o.status === "accepted",
+    ).length,
+    is_estimate: b.status === "open",
+  };
+  if (b.status === "paid" && m.paid[b.id])
+    return { ...m.paid[b.id], ...counts };
   const subtotal = b.orders
     .filter((o) => o.status !== "cancelled")
     .reduce((sum, o) => sum + o.subtotal_cents, 0);
@@ -81,6 +89,7 @@ function overview(
     status: b.status,
     opened_at: b.opened_at,
     paid_at: null,
+    ...counts,
     service_charge_bp: store.service_charge_bp,
     sst_bp: store.sst_bp,
     ...calculateAmounts(subtotal, store.service_charge_bp, store.sst_bp),
@@ -139,7 +148,7 @@ export async function listStoreBills(
     )
     .sort(
       (a, b) =>
-        (b.paid_at ?? b.opened_at).localeCompare(a.paid_at ?? a.opened_at) ||
+        a.table_label.localeCompare(b.table_label, "zh", { numeric: true }) ||
         a.id.localeCompare(b.id),
     );
   return {
@@ -445,5 +454,14 @@ export async function storeMockActionD(action: StoreMockActionD) {
         };
       }
   }
+  persist(s, m);
+}
+
+// M7: public field is is_active; the shared mock state stores active internally.
+export async function setStoreTableActive(id: string, is_active: boolean) {
+  const { s, store, m } = await context(true);
+  if (typeof is_active !== "boolean")
+    fail("VALIDATION_FAILED", "桌子状态不正确");
+  table(s, m, store.id, id).active = is_active;
   persist(s, m);
 }

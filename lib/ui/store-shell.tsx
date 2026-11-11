@@ -1,7 +1,14 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   getSession,
   onSessionChange,
@@ -29,23 +36,36 @@ export function StoreShell({
   const [error, setError] = useState<unknown>();
   const [more, setMore] = useState(false);
   const close = useCallback(() => setMore(false), []);
+  const sessionVersion = useRef(0);
   const load = useCallback(() => {
+    const version = ++sessionVersion.current;
     void getSession()
       .then((s) => {
+        if (version !== sessionVersion.current) return;
         setSession(s);
         setError(undefined);
       })
-      .catch(setError);
+      .catch((e) => {
+        if (version === sessionVersion.current) setError(e);
+      });
   }, []);
   useEffect(() => {
+    const version = sessionVersion;
     load();
     let unsubscribe: (() => void) | undefined;
     try {
-      unsubscribe = onSessionChange(setSession);
+      unsubscribe = onSessionChange((s) => {
+        sessionVersion.current++;
+        setSession(s);
+        setError(undefined);
+      });
     } catch (e) {
       void Promise.resolve().then(() => setError(e));
     }
-    return () => unsubscribe?.();
+    return () => {
+      version.current++;
+      unsubscribe?.();
+    };
   }, [load]);
   const logout = () =>
     void signOut()
@@ -90,7 +110,16 @@ export function StoreShell({
               )}
               {banners}
             </div>
-            {children}
+            {/* Remount all page state when identity, store or write access changes. */}
+            <Fragment
+              key={JSON.stringify([
+                session?.user_id,
+                session?.store?.id,
+                session?.store?.status,
+              ])}
+            >
+              {children}
+            </Fragment>
           </>
         )}
       </div>

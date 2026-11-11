@@ -5,6 +5,7 @@ const unavailable = async (): Promise<never> => {
   throw new DataError("NOT_IMPLEMENTED", "未实现");
 };
 const real: typeof mock = {
+  setStoreTableActive: unavailable,
   listStoreBills: unavailable,
   getStoreBill: unavailable,
   markBillPaid: unavailable,
@@ -20,6 +21,7 @@ const real: typeof mock = {
   storeMockActionD: unavailable,
 };
 export const {
+  setStoreTableActive,
   listStoreBills,
   getStoreBill,
   markBillPaid,

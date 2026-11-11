@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DataError,
+  setStoreTableActive,
+  signOut,
   listStoreBills,
   getStoreBill,
   markBillPaid,
@@ -21,6 +23,24 @@ import {
   type StoreProfilePatch,
   type LiveOrder,
 } from "../data";
+import { BillDetailD } from "./detail-d";
+import { QrCardD, QrPrintD, TableDownloadD } from "./qr-d";
+import {
+  percentToBp,
+  bpToPercent,
+  pauseMessage,
+  needsClosingConfirmation,
+  disableTableMessage,
+  resetTableMessage,
+  resetTableNotice,
+  unservedCount,
+  unservedMessage,
+  paymentFailure,
+  malaysiaToday,
+  adjacentDay,
+  validHistoryDate,
+} from "./store-d-helpers";
+import { useRouter } from "next/navigation";
 import { formatMoney, formatTime } from "../format";
 import {
   Button,
@@ -45,15 +65,17 @@ export function storePageMessage(error: unknown) {
     FORBIDDEN: "没有店铺操作权限",
     STORE_SUSPENDED: "店铺已被平台停用，请联系平台",
     NOT_FOUND: "记录不存在，请刷新后重试",
-    NOT_IMPLEMENTED: "未实现",
+    NOT_IMPLEMENTED: "此功能即将开放",
     TABLE_LABEL_TAKEN: "这个桌号已存在",
-    TABLE_HAS_OPEN_BILL: "这桌还有未结账单，请先结账",
-    BILL_ALREADY_PAID: "这张账单已结账，请刷新列表",
+    TABLE_HAS_OPEN_BILL: "这张桌子还有未结账单，结账后才能删除",
+    BILL_ALREADY_PAID: "这桌已经结账",
     BILL_TOTAL_CHANGED: "账单金额已变化，请重新核对后结账",
   };
   return error.code === "RATE_LIMITED"
     ? `操作太频繁，请 ${error.retryAfterSeconds} 秒后再试`
-    : (text[error.code] ?? error.message);
+    : Object.hasOwn(text, error.code)
+      ? text[error.code]
+      : "操作没有成功，请稍后再试";
 }
 function useStoreResource<T>(fetcher: () => Promise<T>) {
   const [value, setValue] = useState<T>();
@@ -97,7 +119,9 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
 }
 function OrderCardD({ order }: { order: LiveOrder }) {
   return (
-    <article className="card d-order">
+    <article
+      className={`card d-order${order.status === "cancelled" ? " d-cancelled" : ""}`}
+    >
       <div className="d-row">
         <strong>
           {order.dining_tables.label} 桌 · 第 {order.seq_in_bill} 单 · 设备 #
@@ -110,12 +134,14 @@ function OrderCardD({ order }: { order: LiveOrder }) {
         <div key={i}>
           <p>
             {l.item_name} × {l.quantity}{" "}
-            <span>{formatMoney(l.line_total_cents)}</span>
+            <span className="d-order-money">
+              {formatMoney(l.line_total_cents)}
+            </span>
           </p>
           {l.note && <p className="muted">备注：{l.note}</p>}
         </div>
       ))}
-      <p>小计 {formatMoney(order.subtotal_cents)}</p>
+      <p className="d-order-money">小计 {formatMoney(order.subtotal_cents)}</p>
       {order.cancel_reason && (
         <p>
           取消原因：
@@ -137,7 +163,7 @@ export function BillsPageD() {
   const [status, setStatus] = useState<"open" | "paid">("open"),
     [page, setPage] = useState(1);
   const [tableId, setTableId] = useState("");
-  const [paidDate, setPaidDate] = useState("");
+  const [paidDate, setPaidDate] = useState(malaysiaToday);
   const tables = useStoreResource(listStoreTables);
   const fetcher = useCallback(
     () =>
@@ -169,12 +195,14 @@ export function BillsPageD() {
   async function open(id: string) {
     const n = ++selection.current;
     setDetailLoading(true);
+    setNotice("");
+    setDetail(undefined);
     setError(undefined);
     try {
       const v = await getStoreBill(id);
       if (selection.current === n) setDetail(v);
     } catch (e) {
-      setError(e);
+      if (selection.current === n) setError(e);
     } finally {
       if (selection.current === n) setDetailLoading(false);
     }
@@ -186,24 +214,27 @@ export function BillsPageD() {
       await markBillPaid(detail.id, detail.total_cents);
       setConfirm(false);
       setDetail(undefined);
-      setNotice("已结账，顾客令牌已失效");
+      setNotice("已标记付款，这桌已清桌");
       r.load();
     } catch (e) {
-      setError(e);
-      setConfirm(false);
-      if (e instanceof DataError && String(e.code) === "BILL_TOTAL_CHANGED") {
-        try {
-          setDetail(await getStoreBill(detail.id));
-        } catch (next) {
-          setError(next);
-        }
+      const failure = paymentFailure(e);
+      setNotice(failure.message);
+      setError(undefined);
+      if (failure.close) {
+        setConfirm(false);
+        setDetail(undefined);
+        selection.current++;
+        r.load();
+      } else if (failure.total !== undefined) {
+        setDetail({ ...detail, total_cents: failure.total });
+        setConfirm(true);
       }
     } finally {
       setBusy(false);
     }
   }
   return (
-    <main className="d-page">
+    <main className="d-page d-bills">
       <h1>账单</h1>
       <div className="actions">
         {(["open", "paid"] as const).map((s) => (
@@ -211,12 +242,15 @@ export function BillsPageD() {
             key={s}
             variant={status === s ? "primary" : "secondary"}
             onClick={() => {
+              selection.current++;
+              setError(undefined);
+              setConfirm(false);
               setStatus(s);
               setPage(1);
               setDetail(undefined);
             }}
           >
-            {s === "open" ? "未结账" : "已结账"}
+            {s === "open" ? "未付款" : "今天已付款"}
           </Button>
         ))}
       </div>
@@ -263,7 +297,9 @@ export function BillsPageD() {
           <>
             {!r.value.bills.length ? (
               <EmptyState>
-                目前没有{status === "open" ? "未结账" : "已结账"}账单
+                {status === "open"
+                  ? "目前没有待付款的桌子"
+                  : "今天还没有已付款账单"}
               </EmptyState>
             ) : (
               <div className="d-grid">
@@ -271,6 +307,13 @@ export function BillsPageD() {
                   <article className="card" key={b.id}>
                     <h2>{b.table_label} 桌</h2>
                     <p>{formatTime(b.paid_at ?? b.opened_at)}</p>
+                    <p>
+                      {b.order_count ?? 0} 单 ·{" "}
+                      {b.status === "open" ? "未付款" : "已付款"}
+                    </p>
+                    {!!b.unserved_count && (
+                      <p>还有 {b.unserved_count} 单未上菜</p>
+                    )}
                     <p>
                       {status === "open" ? "应收（预估）" : "实收"}{" "}
                       {formatMoney(b.total_cents)}
@@ -305,39 +348,56 @@ export function BillsPageD() {
         )
       )}
       {detailLoading && (
-        <Modal title="账单详情" onClose={close}>
+        <BillDetailD title="账单详情" onClose={close}>
           <Skeleton />
-        </Modal>
+        </BillDetailD>
       )}
       {detail && !detailLoading && !confirm && (
-        <Modal title={`${detail.table_label} 桌 · 账单详情`} onClose={close}>
+        <BillDetailD
+          title={`${detail.table_label} 桌 · 账单详情`}
+          onClose={close}
+        >
           {!!error && <Banner tone="red">{storePageMessage(error)}</Banner>}
           <p>
             {detail.status === "paid" ? "已结账" : "未结账 · 以确认时金额为准"}
           </p>
-          <AmountDetails amounts={detail} />
+          <AmountDetails
+            amounts={detail}
+            estimated={detail.status === "open"}
+          />
           {detail.orders.map((o) => (
             <OrderCardD key={o.id} order={o} />
           ))}
           {detail.status === "open" && !r.suspended && (
-            <Button onClick={() => setConfirm(true)}>
-              结账 {formatMoney(detail.total_cents)}
+            <Button
+              onClick={() => {
+                setNotice("");
+                setConfirm(true);
+              }}
+            >
+              标记已付款并清桌
             </Button>
           )}
-        </Modal>
+        </BillDetailD>
       )}
       {detail && confirm && (
         <ConfirmDialog
-          title="确认已收款并结账？"
-          confirmText="确认结账"
+          title={`确认 ${detail.table_label} 桌已付款 ${formatMoney(detail.total_cents)}？`}
+          confirmText="确认已付款"
           busy={busy}
           onClose={closeConfirm}
           onConfirm={() => void pay()}
         >
           <p>
-            应收 {formatMoney(detail.total_cents)}
-            。确认后清台，所有顾客账单令牌失效。
+            确认 {detail.table_label} 桌已付款 {formatMoney(detail.total_cents)}
+            ？标记后账单结清，这桌恢复空桌，下一位客人扫码会开新账单。
           </p>
+          {unservedMessage(unservedCount(detail.orders)) && (
+            <Banner tone="yellow">
+              {unservedMessage(unservedCount(detail.orders))}
+            </Banner>
+          )}
+          {notice && <Banner tone="yellow">{notice}</Banner>}
         </ConfirmDialog>
       )}
     </main>
@@ -345,9 +405,10 @@ export function BillsPageD() {
 }
 export function TablesPageD() {
   const r = useStoreResource(listStoreTables);
+  const profile = useStoreResource(getStoreProfile);
   const [edit, setEdit] = useState<{ id?: string; label: string }>();
   const [pending, setPending] = useState<{
-    kind: "delete" | "rotate";
+    kind: "delete" | "rotate" | "disable";
     table: DiningTable;
   }>();
   const [links, setLinks] =
@@ -371,7 +432,6 @@ export function TablesPageD() {
       await fn();
       setEdit(undefined);
       setPending(undefined);
-      setLinks(undefined);
       setNotice(success);
       r.load();
     } catch (e) {
@@ -405,7 +465,7 @@ export function TablesPageD() {
               setEdit({ label: "" });
             }}
           >
-            新增桌号
+            新增桌子
           </Button>
         )}
         <Button
@@ -414,7 +474,7 @@ export function TablesPageD() {
           disabled={!selected.length}
           onClick={() => void qr(selected)}
         >
-          查看 / 打印所选桌码
+          批量下载二维码
         </Button>
       </div>
       {r.error ? (
@@ -422,68 +482,114 @@ export function TablesPageD() {
       ) : r.loading ? (
         <Skeleton />
       ) : !r.value?.length ? (
-        <EmptyState>还没有桌号，先新增一个桌号</EmptyState>
+        <EmptyState>还没有桌子，新增第一张桌子后就能打印二维码</EmptyState>
       ) : (
-        <div className="d-grid">
-          {r.value.map((t) => (
-            <article className="card" key={t.id}>
-              <label className="d-row">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(t.id)}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? [...selected, t.id]
-                        : selected.filter((id) => id !== t.id),
-                    )
-                  }
-                />
-                <strong>{t.label} 桌</strong>
-              </label>
-              <p>
-                {t.is_active ? "启用" : "停用"} · 桌码版本 {t.qr_version}
-              </p>
-              <div className="actions">
-                <Button
-                  variant="secondary"
-                  busy={busy}
-                  onClick={() => void qr([t.id])}
-                >
-                  查看桌码
-                </Button>
-                {!r.suspended && (
-                  <>
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        setError(undefined);
-                        setEdit({ id: t.id, label: t.label });
-                      }}
+        <div className="d-tables">
+          <label className="d-row">
+            <input
+              type="checkbox"
+              checked={
+                !!r.value.length &&
+                r.value.every((t) => selected.includes(t.id))
+              }
+              onChange={(e) =>
+                setSelected(e.target.checked ? r.value!.map((t) => t.id) : [])
+              }
+            />
+            全选
+          </label>
+          <table className="d-responsive-table">
+            <thead>
+              <tr>
+                <th>选择 / 桌号</th>
+                <th>启用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.value.map((t) => (
+                <tr key={t.id}>
+                  <td>
+                    <label className="d-row">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(t.id)}
+                        onChange={(e) =>
+                          setSelected(
+                            e.target.checked
+                              ? [...selected, t.id]
+                              : selected.filter((id) => id !== t.id),
+                          )
+                        }
+                      />
+                      <strong>{t.label} 桌</strong>
+                    </label>
+                  </td>
+                  <td>
+                    <Toggle
+                      checked={t.is_active}
+                      disabled={busy || r.suspended}
+                      onChange={(active) =>
+                        active
+                          ? void mutate(
+                              () => setStoreTableActive(t.id, true),
+                              "已启用桌子",
+                            )
+                          : setPending({ kind: "disable", table: t })
+                      }
                     >
-                      改名
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setPending({ kind: "rotate", table: t })}
-                    >
-                      重置桌码
-                    </Button>
-                    <Button
-                      variant="danger"
-                      onClick={() => setPending({ kind: "delete", table: t })}
-                    >
-                      删除
-                    </Button>
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
+                      {t.is_active ? "启用" : "停用"}
+                    </Toggle>
+                  </td>
+                  <td>
+                    <div className="actions">
+                      <Button
+                        variant="secondary"
+                        busy={busy}
+                        onClick={() => void qr([t.id])}
+                      >
+                        查看二维码
+                      </Button>
+                      <TableDownloadD id={t.id} onError={setError} />
+                      {!r.suspended && (
+                        <>
+                          <Button
+                            variant="secondary"
+                            onClick={() => {
+                              setError(undefined);
+                              setEdit({ id: t.id, label: t.label });
+                            }}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() =>
+                              setPending({ kind: "rotate", table: t })
+                            }
+                          >
+                            重置桌码
+                          </Button>
+                          <Button
+                            variant="danger"
+                            onClick={() =>
+                              setPending({ kind: "delete", table: t })
+                            }
+                          >
+                            删除
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       {edit && (
-        <Modal title={edit.id ? "修改桌号" : "新增桌号"} onClose={closeEdit}>
+        <Modal title={edit.id ? "修改桌号" : "新增桌子"} onClose={closeEdit}>
           {!!error && <Banner tone="red">{storePageMessage(error)}</Banner>}
           <form
             onSubmit={(e) => {
@@ -514,50 +620,62 @@ export function TablesPageD() {
           title={
             pending.kind === "delete"
               ? `删除 ${pending.table.label} 桌？`
-              : `重置 ${pending.table.label} 桌的二维码？`
+              : pending.kind === "disable"
+                ? `停用 ${pending.table.label} 桌？`
+                : `重置 ${pending.table.label} 桌的二维码？`
           }
           danger
           busy={busy}
           onClose={closeConfirm}
-          onConfirm={() =>
+          confirmText={pending.kind === "rotate" ? "确认重置" : "确认"}
+          backText="取消"
+          onConfirm={() => {
+            const { kind, table } = pending;
             void mutate(
-              () =>
-                pending.kind === "delete"
-                  ? softDeleteStoreTable(pending.table.id)
-                  : rotateStoreTableQr(pending.table.id),
-              pending.kind === "delete"
+              async () => {
+                if (kind === "delete") await softDeleteStoreTable(table.id);
+                else if (kind === "disable")
+                  await setStoreTableActive(table.id, false);
+                else {
+                  await rotateStoreTableQr(table.id);
+                  setLinks(await getStoreTableQrLinks([table.id]));
+                }
+              },
+              kind === "delete"
                 ? "桌号已删除"
-                : "桌码已重置，请更换桌贴",
-            )
-          }
+                : kind === "disable"
+                  ? "已停用桌子"
+                  : resetTableNotice(table.label),
+            );
+          }}
         >
           <p>
             {pending.kind === "delete"
-              ? "删除后二维码失效，历史账单保留。有未结账单时不能删除。"
-              : "旧二维码将立即失效，该桌所有顾客需重新扫码。此操作不会结账。"}
+              ? "删除后这张桌子的二维码将失效，确定删除？"
+              : pending.kind === "disable"
+                ? disableTableMessage
+                : resetTableMessage(pending.table.label)}
           </p>
           {!!error && <Banner tone="red">{storePageMessage(error)}</Banner>}
         </ConfirmDialog>
       )}
       {links && (
+        <QrPrintD links={links} storeName={profile.value?.name ?? ""} />
+      )}
+      {links && (
         <Modal title="桌号二维码" onClose={closeLinks}>
-          <div className="d-print">
-            <p>当前版本未安装二维码生成库，请复制链接；占位不可扫码。</p>
-            <div className="d-print-grid">
-              {links.map((l) => (
-                <article key={l.table_id} className="card d-qr">
-                  <h2>{l.label} 桌</h2>
-                  <div className="d-qr-placeholder">
-                    二维码占位
-                    <br />
-                    不可扫码
-                  </div>
-                  <a href={l.url}>{l.url}</a>
-                </article>
-              ))}
-            </div>
+          {notice && <Banner tone="green">{notice}</Banner>}
+          <div className="d-grid">
+            {links.map((l) => (
+              <QrCardD
+                key={l.table_id}
+                link={l}
+                storeName={profile.value?.name ?? ""}
+                download
+              />
+            ))}
           </div>
-          <Button onClick={() => window.print()}>
+          <Button disabled={!profile.value} onClick={() => window.print()}>
             打印 / 保存为 PDF（A4 每页 4 个）
           </Button>
         </Modal>
@@ -575,6 +693,12 @@ const patchOf = (s: Store): StoreProfilePatch => ({
   sst_bp: s.sst_bp,
 });
 export function SettingsPageD() {
+  const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  const [pause, setPause] = useState(false);
+  const closePause = useCallback(() => setPause(false), []);
+  const [rates, setRates] = useState({ service_charge_bp: "", sst_bp: "" });
+  const [rateErrors, setRateErrors] = useState<Record<string, string>>({});
   const r = useStoreResource(getStoreProfile);
   const [draft, setDraft] = useState<StoreProfilePatch>();
   const [saved, setSaved] = useState("");
@@ -590,7 +714,21 @@ export function SettingsPageD() {
       const p = patchOf(r.value);
       void Promise.resolve().then(() => {
         setDraft(p);
+        setRates({
+          service_charge_bp: bpToPercent(p.service_charge_bp ?? 0),
+          sst_bp: bpToPercent(p.sst_bp ?? 0),
+        });
         setSaved(JSON.stringify(p));
+        if (!r.value?.is_profile_complete)
+          requestAnimationFrame(() => {
+            const inputs =
+              formRef.current?.querySelectorAll<HTMLInputElement>(
+                ".field input",
+              );
+            [inputs?.[0], inputs?.[2], inputs?.[3]]
+              .find((input) => input && !input.value.trim())
+              ?.focus();
+          });
       });
     }
   }, [r.value, draft]);
@@ -600,14 +738,33 @@ export function SettingsPageD() {
   }
   async function save() {
     if (busy || !draft) return;
+    const errors: Record<string, string> = {};
+    const service = percentToBp(rates.service_charge_bp, 20),
+      sst = percentToBp(rates.sst_bp, 10);
+    if (service === undefined)
+      errors.service_charge_bp = "服务费要在 0–20% 之间";
+    if (sst === undefined) errors.sst_bp = "SST 要在 0–10% 之间";
+    setRateErrors(errors);
+    if (Object.keys(errors).length) return;
+    if (!draft.name?.trim()) {
+      setError(
+        new DataError("VALIDATION_FAILED", "请填写店名", { field: "name" }),
+      );
+      formRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
-      const result = await saveStoreProfile(draft);
+      const result = await saveStoreProfile({
+        ...draft,
+        service_charge_bp: service,
+        sst_bp: sst,
+      });
       const p = patchOf(result);
       setDraft(p);
       setSaved(JSON.stringify(p));
-      setNotice("店铺设置已保存");
+      setNotice("已保存");
     } catch (e) {
       setError(e);
     } finally {
@@ -621,6 +778,11 @@ export function SettingsPageD() {
   return (
     <main className="d-page">
       <h1>店铺设置</h1>
+      {r.value && !r.value.is_profile_complete && (
+        <Banner tone="yellow">
+          先填写店名、地址和营业时间，顾客扫码时会看到店名
+        </Banner>
+      )}
       {notice && <Banner tone="green">{notice}</Banner>}
       {!!error && <Banner tone="red">{storePageMessage(error)}</Banner>}
       {r.error ? (
@@ -629,6 +791,8 @@ export function SettingsPageD() {
         <Skeleton />
       ) : (
         <form
+          ref={formRef}
+          noValidate
           className="card d-settings"
           onSubmit={(e) => {
             e.preventDefault();
@@ -674,16 +838,18 @@ export function SettingsPageD() {
             <p className="muted">地址和营业时间都填写后，店铺资料即为完整。</p>
             <Toggle
               checked={draft.is_accepting_orders ?? false}
-              onChange={(is_accepting_orders) =>
-                change({ is_accepting_orders })
-              }
+              onChange={(is_accepting_orders) => {
+                if (needsClosingConfirmation(is_accepting_orders))
+                  setPause(true);
+                else change({ is_accepting_orders });
+              }}
             >
-              营业中（接受新订单）
+              接受下单
             </Toggle>
             {(
               [
-                ["service_charge_bp", "服务费（0–2000 基点）"],
-                ["sst_bp", "SST（0–1000 基点）"],
+                ["service_charge_bp", "服务费 %（0–20）"],
+                ["sst_bp", "SST %（0–10）"],
               ] as const
             ).map(([key, label]) => (
               <label key={key}>
@@ -691,62 +857,124 @@ export function SettingsPageD() {
                 <input
                   type="number"
                   min={0}
-                  max={key === "service_charge_bp" ? 2000 : 1000}
-                  step={1}
+                  max={key === "service_charge_bp" ? 20 : 10}
+                  step="0.01"
                   required
-                  value={Number.isNaN(draft[key]) ? "" : draft[key]}
-                  onChange={(e) =>
+                  value={rates[key]}
+                  onChange={(e) => {
+                    setRates({ ...rates, [key]: e.target.value });
                     change({
                       [key]:
-                        e.target.value === "" ? NaN : Number(e.target.value),
-                    })
-                  }
+                        percentToBp(
+                          e.target.value,
+                          key === "service_charge_bp" ? 20 : 10,
+                        ) ?? NaN,
+                    });
+                  }}
                 />
+                {rateErrors[key] && <span role="alert">{rateErrors[key]}</span>}
                 {field === key && (
                   <span role="alert">{storePageMessage(error)}</span>
                 )}
               </label>
             ))}
             <p className="muted">
-              100 基点 = 1%。SST
-              对小计加服务费计收。费率变更会影响未结账单，已结账金额保持不变。
+              填 0 即不收，顾客和账单上就不显示这一项；SST 按小计加服务费计算
             </p>
-            <Button
-              type="submit"
-              busy={busy}
-              disabled={!dirty || !draft.name?.trim()}
-            >
-              保存设置
-            </Button>
+            {!r.suspended && (
+              <div className="d-settings-save">
+                <Button type="submit" busy={busy} disabled={!dirty}>
+                  保存
+                </Button>
+              </div>
+            )}
           </fieldset>
         </form>
+      )}
+      <Button
+        variant="secondary"
+        onClick={() =>
+          unsaved.request(() => {
+            void signOut()
+              .then(() => router.replace("/login"))
+              .catch(setError);
+          })
+        }
+      >
+        退出登录
+      </Button>
+      {pause && (
+        <ConfirmDialog
+          title={pauseMessage}
+          backText="取消"
+          onClose={closePause}
+          onConfirm={() => {
+            change({ is_accepting_orders: false });
+            setPause(false);
+          }}
+        />
       )}
       {unsaved.dialog}
     </main>
   );
 }
 export function HistoryPageD() {
-  const [date, setDate] = useState(() =>
-    new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10),
-  );
+  const today = malaysiaToday();
+  const [date, setDate] = useState(malaysiaToday);
+  const [order, setOrder] = useState<LiveOrder>();
+  const closeOrder = useCallback(() => setOrder(undefined), []);
   const fetcher = useCallback(() => getStoreHistory(date), [date]);
   const r = useStoreResource(fetcher);
   return (
     <main className="d-page">
       <h1>订单记录</h1>
-      <label>
-        日期（马来西亚时间）
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
-      </label>
-      <Button variant="secondary" onClick={r.load}>
-        刷新
-      </Button>
+      {order && (
+        <div className="d-history-drawer">
+          <Modal title="订单明细" onClose={closeOrder}>
+            <OrderCardD order={order} />
+          </Modal>
+        </div>
+      )}
+      <div className="actions">
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setDate(adjacentDay(date, -1));
+            setOrder(undefined);
+          }}
+        >
+          ← 前一天
+        </Button>
+        <label>
+          日期（马来西亚时间）
+          <input
+            type="date"
+            value={date}
+            max={today}
+            onChange={(e) => {
+              if (validHistoryDate(e.target.value, today)) {
+                setDate(e.target.value);
+                setOrder(undefined);
+              }
+            }}
+          />
+        </label>
+        <Button
+          variant="secondary"
+          disabled={date >= today}
+          onClick={() => {
+            setDate(adjacentDay(date, 1));
+            setOrder(undefined);
+          }}
+        >
+          后一天 →
+        </Button>
+        <Button variant="secondary" onClick={r.load}>
+          刷新
+        </Button>
+      </div>
       {r.error ? (
-        <ErrorState message={storePageMessage(r.error)} retry={r.load} />
+        <ErrorState message="记录加载失败，请重试" retry={r.load} />
       ) : r.loading ? (
         <Skeleton />
       ) : (
@@ -757,11 +985,17 @@ export function HistoryPageD() {
                 <h2>当日营业额</h2>
                 <strong>{formatMoney(r.value.stats.revenue_cents)}</strong>
                 <p>
+                  小计 {formatMoney(r.value.stats.paid_bills.subtotal_cents)} ·
+                  服务费{" "}
+                  {formatMoney(r.value.stats.paid_bills.service_charge_cents)} ·
+                  SST {formatMoney(r.value.stats.paid_bills.sst_cents)}
+                </p>
+                <p>
                   按结账时间统计 · {r.value.stats.paid_bills.count} 张已结账单
                 </p>
               </article>
               <article className="card">
-                <h2>当前未付金额</h2>
+                <h2>未结清金额（实时）</h2>
                 <strong>
                   {formatMoney(r.value.stats.open_bills.total_cents)}
                 </strong>
@@ -780,9 +1014,40 @@ export function HistoryPageD() {
               </article>
             </div>
             {!r.value.orders.length ? (
-              <EmptyState>这一天没有订单记录</EmptyState>
+              <EmptyState>这天没有订单</EmptyState>
             ) : (
-              r.value.orders.map((o) => <OrderCardD key={o.id} order={o} />)
+              <table className="d-responsive-table d-history-list">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>桌号</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.value.orders.map((o) => (
+                    <tr key={o.id}>
+                      <td>{formatTime(o.created_at)}</td>
+                      <td>{o.dining_tables.label} 桌</td>
+                      <td
+                        className={o.status === "cancelled" ? "d-strike" : ""}
+                      >
+                        {formatMoney(o.subtotal_cents)}
+                      </td>
+                      <td>
+                        <OrderStatusLabel status={o.status} />
+                      </td>
+                      <td>
+                        <Button variant="secondary" onClick={() => setOrder(o)}>
+                          查看明细
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </>
         )
