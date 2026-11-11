@@ -79,10 +79,14 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [retry, setRetry] = useState<(() => void) | null>(null);
   const sessionKey = useRef<string | undefined>(undefined);
   const generation = useRef(0);
+  // Keep monotonic across session resets so pending responses stay below the floor.
+  const storeSeq = useRef(0);
+  const storeFloor = useRef(0);
   const stopRef = useRef<() => void>(() => {});
   const storeRef = useRef<LiveStoreStatus | undefined>(undefined);
   const reset = useCallback((expired: boolean) => {
     generation.current++;
+    storeFloor.current = ++storeSeq.current;
     stopRef.current();
     reconnectRef.current = () => {};
     reloadRef.current = () => {};
@@ -114,14 +118,19 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     void wakeLock.current?.release().catch(() => {});
     wakeLock.current = null;
   }, []);
-  const receiveStore = useCallback((value: LiveStoreStatus) => {
-    storeRef.current = value;
-    setStore(value);
-    if (value.status === "suspended") {
-      setPauseConfirm(false);
-      setRetry(null);
-    }
-  }, []);
+  const receiveStore = useCallback(
+    (value: LiveStoreStatus, seq = ++storeSeq.current) => {
+      if (seq <= storeFloor.current) return;
+      storeFloor.current = seq;
+      storeRef.current = value;
+      setStore(value);
+      if (value.status === "suspended") {
+        setPauseConfirm(false);
+        setRetry(null);
+      }
+    },
+    [],
+  );
   const canWrite = () =>
     started &&
     !expired &&
@@ -226,6 +235,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (e instanceof DataError && e.code === "STORE_SUSPENDED") {
+        storeFloor.current = ++storeSeq.current;
         if (storeRef.current)
           receiveStore({ ...storeRef.current, status: "suspended" });
         setPauseConfirm(false);
@@ -243,8 +253,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       if (sessionKey.current !== undefined && key !== sessionKey.current)
         reset(!session);
       sessionKey.current = key;
-      if (session?.store?.status === "suspended" && storeRef.current)
-        receiveStore({ ...storeRef.current, status: "suspended" });
+      if (session?.store?.status === "suspended") receiveStore(session.store);
     };
     let alive = true;
     let notified = false;
@@ -316,6 +325,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           0,
           ...orderRef.current.map((o) => Date.parse(o.updated_at)),
         );
+        const seq = ++storeSeq.current;
         const [updates, currentStore] = await Promise.all([
           fetchOrdersUpdatedSince(
             new Date(Math.max(0, max - 30000)).toISOString(),
@@ -324,7 +334,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         ]);
         if (!alive) return;
         const count = ingest(updates);
-        receiveStore(currentStore);
+        receiveStore(currentStore, seq);
         setError("");
         if (disconnectedAt && count)
           setNotice(`断线期间收到 ${count} 张新订单`);
@@ -395,6 +405,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         sessionKey.current = key;
         if (!session.store)
           throw new DataError("FORBIDDEN", "没有店铺访问权限");
+        if (session.store.status === "suspended") receiveStore(session.store);
+        const seq = ++storeSeq.current;
         const [live, served, currentStore] = await Promise.all([
           listLiveOrders(),
           listServedToday(),
@@ -403,7 +415,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         storeId = session.store.id;
         ingest([...live, ...served]);
-        receiveStore(currentStore);
+        receiveStore(currentStore, seq);
         setError("");
         setExpired(false);
         connect();
@@ -432,9 +444,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       void pull();
     };
     const changedStore = () => {
+      const seq = ++storeSeq.current;
       void getStoreStatus()
         .then((s) => {
-          if (alive) receiveStore(s);
+          if (alive) receiveStore(s, seq);
         })
         .catch((e) => {
           if (alive) report(e);
@@ -526,6 +539,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         reloadRef.current();
       } else {
         report(e);
+        if (currentGeneration !== generation.current) return false;
         setToast("操作没有成功，请重试");
       }
       return false;
@@ -601,10 +615,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     if (!canWrite()) return;
     const currentGeneration = generation.current;
     setSwitchBusy(true);
+    const seq = ++storeSeq.current;
     try {
       const result = await setAcceptingOrders(value);
       if (currentGeneration !== generation.current) return;
-      receiveStore(result);
+      receiveStore(result, seq);
       setPauseConfirm(false);
     } catch (e) {
       if (currentGeneration === generation.current) report(e);

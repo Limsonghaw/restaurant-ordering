@@ -47,13 +47,13 @@ export async function liveDelay() {
       "登录已过期，请重新登录，否则收不到新订单",
     );
 }
-export function allLiveOrders(): LiveOrder[] {
+export function allLiveOrders(storeId: string): LiveOrder[] {
   const live = readLive();
   const state = readState();
   const result: LiveOrder[] = [];
   for (const bill of state.bills) {
     const table = state.tables.find((t) => t.id === bill.table_id)!;
-    if (table.store_id !== state.stores[0].id) continue;
+    if (table.store_id !== storeId) continue;
     for (const order of bill.orders) {
       let meta = live.meta[order.id];
       if (!meta || meta.status !== order.status) {
