@@ -16,6 +16,7 @@ import {
   getLiveMockSettings,
   configureLiveMock,
   getSession,
+  onSessionChange,
   getStoreStatus,
   isMock,
   listLiveOrders,
@@ -23,13 +24,14 @@ import {
   setAcceptingOrders,
   subscribeStoreOrders,
   updateOrderStatus,
+  type Session,
   type LiveOrder,
   type LiveStoreStatus,
   type OrderConnection,
   type OrderStatusChange,
 } from "../data";
 import { mergeLiveOrders, reconnectDelay } from "../data/live-rules";
-import { errorMessage } from "../format";
+import { liveErrorMessage } from "./live-errors";
 import { routes } from "../routes";
 import { Banner, Button, ConfirmDialog, Toast } from "./common";
 import { StoreShell } from "./store-shell";
@@ -73,6 +75,56 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [pauseConfirm, setPauseConfirm] = useState(false);
   const [switchBusy, setSwitchBusy] = useState(false);
   const [retry, setRetry] = useState<(() => void) | null>(null);
+  const sessionKey = useRef<string | undefined>(undefined);
+  const generation = useRef(0);
+  const stopRef = useRef<() => void>(() => {});
+  const storeRef = useRef<LiveStoreStatus | undefined>(undefined);
+  const reset = useCallback((expired: boolean) => {
+    generation.current++;
+    stopRef.current();
+    reconnectRef.current = () => {};
+    reloadRef.current = () => {};
+    orderRef.current = [];
+    storeRef.current = undefined;
+    busyRef.current.clear();
+    setOrders([]);
+    setStore(undefined);
+    setStarted(false);
+    setLoading(false);
+    setConnection("disconnected");
+    setBusy([]);
+    setSwitchBusy(false);
+    setPauseConfirm(false);
+    setRetry(null);
+    setToast("");
+    setNotice("");
+    setError("");
+    setOverdue(false);
+    setSound(false);
+    setWake(false);
+    setWakeDismissed(false);
+    setExpired(expired);
+    if (audio.current) {
+      audio.current.onstatechange = null;
+      void audio.current.close().catch(() => {});
+      audio.current = null;
+    }
+    void wakeLock.current?.release().catch(() => {});
+    wakeLock.current = null;
+  }, []);
+  const receiveStore = useCallback((value: LiveStoreStatus) => {
+    storeRef.current = value;
+    setStore(value);
+    if (value.status === "suspended") {
+      setPauseConfirm(false);
+      setRetry(null);
+    }
+  }, []);
+  const canWrite = () =>
+    started &&
+    !expired &&
+    !!storeRef.current &&
+    storeRef.current.status !== "suspended";
   const audio = useRef<AudioContext | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const orderRef = useRef<LiveOrder[]>([]);
@@ -118,9 +170,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       mock.current.sound_paused = false;
       if (isMock)
         void configureLiveMock({ sound_paused: false }).catch(() => {});
+      const currentGeneration = generation.current;
       void audio.current
         .resume()
-        .then(play)
+        .then(() => {
+          if (currentGeneration === generation.current) play();
+        })
         .catch(() => setSound(false));
     } catch {
       setSound(false);
@@ -136,7 +191,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
+      const currentGeneration = generation.current;
       const lock = await navigator.wakeLock.request("screen");
+      if (currentGeneration !== generation.current) {
+        void lock.release().catch(() => {});
+        return;
+      }
       wakeLock.current = lock;
       setWake(true);
       lock.addEventListener("release", () => setWake(false));
@@ -157,11 +217,51 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     },
     [play],
   );
-  const report = useCallback((e: unknown) => {
-    if (e instanceof DataError && e.code === "UNAUTHENTICATED")
-      setExpired(true);
-    else setError(errorMessage(e));
-  }, []);
+  const report = useCallback(
+    (e: unknown) => {
+      if (e instanceof DataError && e.code === "UNAUTHENTICATED") {
+        reset(true);
+        return;
+      }
+      if (e instanceof DataError && e.code === "STORE_SUSPENDED") {
+        if (storeRef.current)
+          receiveStore({ ...storeRef.current, status: "suspended" });
+        setPauseConfirm(false);
+        setRetry(null);
+      }
+      setError(liveErrorMessage(e));
+    },
+    [reset, receiveStore],
+  );
+  useEffect(() => {
+    const observe = (session: Session | null) => {
+      const key = session
+        ? JSON.stringify([session.user_id, session.store?.id])
+        : "";
+      if (sessionKey.current !== undefined && key !== sessionKey.current)
+        reset(!session);
+      sessionKey.current = key;
+      if (session?.store?.status === "suspended" && storeRef.current)
+        receiveStore({ ...storeRef.current, status: "suspended" });
+    };
+    let alive = true;
+    let notified = false;
+    const unsubscribe = onSessionChange((session) => {
+      notified = true;
+      if (alive) observe(session);
+    });
+    void getSession()
+      .then((session) => {
+        if (alive && !notified) observe(session);
+      })
+      .catch((e) => {
+        if (alive && !notified) report(e);
+      });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [reset, receiveStore, report]);
   useEffect(() => {
     if (!isMock) return;
     let alive = true;
@@ -178,7 +278,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             setWake(false);
             void wakeLock.current?.release().catch(() => {});
           }
-          if (settings.expired) setExpired(true);
+          if (settings.expired) reset(true);
           else setExpired(false);
         })
         .catch(report);
@@ -191,7 +291,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("ro-mock:live", sync);
       window.removeEventListener("storage", sync);
     };
-  }, [report]);
+  }, [report, reset]);
   useEffect(() => {
     if (!started) return;
     let alive = true;
@@ -222,7 +322,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         ]);
         if (!alive) return;
         const count = ingest(updates);
-        setStore(currentStore);
+        receiveStore(currentStore);
         setError("");
         if (disconnectedAt && count)
           setNotice(`断线期间收到 ${count} 张新订单`);
@@ -283,6 +383,14 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       try {
         const session = await getSession();
         if (!session) throw new DataError("UNAUTHENTICATED", "登录已过期");
+        if (!alive) return;
+        const key = JSON.stringify([session.user_id, session.store?.id]);
+        if (sessionKey.current !== undefined && sessionKey.current !== key) {
+          sessionKey.current = key;
+          reset(false);
+          return;
+        }
+        sessionKey.current = key;
         if (!session.store)
           throw new DataError("FORBIDDEN", "没有店铺访问权限");
         const [live, served, currentStore] = await Promise.all([
@@ -293,7 +401,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         storeId = session.store.id;
         ingest([...live, ...served]);
-        setStore(currentStore);
+        receiveStore(currentStore);
         setError("");
         setExpired(false);
         connect();
@@ -324,9 +432,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const changedStore = () => {
       void getStoreStatus()
         .then((s) => {
-          if (alive) setStore(s);
+          if (alive) receiveStore(s);
         })
-        .catch(report);
+        .catch((e) => {
+          if (alive) report(e);
+        });
     };
     window.addEventListener("offline", offline);
     window.addEventListener("online", online);
@@ -342,7 +452,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const repeat = setInterval(() => {
       if (orderRef.current.some((o) => o.status === "new")) play();
     }, 10000);
-    return () => {
+    const stop = () => {
+      if (!alive) return;
       alive = false;
       unsubscribe?.();
       clearTimeout(timer);
@@ -354,7 +465,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("ro-mock:change", changedStore);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [started, ingest, play, report, requestWake]);
+    stopRef.current = stop;
+    return stop;
+  }, [started, ingest, play, report, requestWake, receiveStore, reset]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 6000);
@@ -385,12 +498,14 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     order: LiveOrder,
     value: OrderStatusChange,
   ): Promise<boolean> {
-    if (busyRef.current.has(order.id)) return false;
+    if (!canWrite() || busyRef.current.has(order.id)) return false;
+    const currentGeneration = generation.current;
     busyRef.current.add(order.id);
     setBusy([...busyRef.current]);
     setRetry(null);
     try {
       const result = await updateOrderStatus(order.id, value);
+      if (currentGeneration !== generation.current) return false;
       ingest([result]);
       setToast(
         value.to === "served"
@@ -399,6 +514,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       );
       return true;
     } catch (e) {
+      if (currentGeneration !== generation.current) return false;
       if (
         e instanceof DataError &&
         [
@@ -413,35 +529,45 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             : "这张订单已被处理",
         );
         try {
-          ingest(await fetchOrdersUpdatedSince(new Date(0).toISOString()));
+          const updates = await fetchOrdersUpdatedSince(
+            new Date(0).toISOString(),
+          );
+          if (currentGeneration === generation.current) ingest(updates);
         } catch (error) {
-          report(error);
+          if (currentGeneration === generation.current) report(error);
         }
       } else if (e instanceof DataError && e.code === "UNAUTHENTICATED")
         report(e);
       else if (e instanceof DataError && e.code === "STORE_SUSPENDED") {
-        setStore((s) => (s ? { ...s, status: "suspended" } : s));
+        report(e);
       } else {
-        setToast("操作没有成功，请重试");
-        setRetry(() => () => {
-          void change(order, value);
-        });
+        setToast(liveErrorMessage(e));
+        if (canWrite())
+          setRetry(() => () => {
+            void change(order, value);
+          });
       }
       return false;
     } finally {
-      busyRef.current.delete(order.id);
-      setBusy([...busyRef.current]);
+      if (currentGeneration === generation.current) {
+        busyRef.current.delete(order.id);
+        setBusy([...busyRef.current]);
+      }
     }
   }
   async function accepting(value: boolean) {
+    if (!canWrite()) return;
+    const currentGeneration = generation.current;
     setSwitchBusy(true);
     try {
-      setStore(await setAcceptingOrders(value));
+      const result = await setAcceptingOrders(value);
+      if (currentGeneration !== generation.current) return;
+      receiveStore(result);
       setPauseConfirm(false);
     } catch (e) {
-      report(e);
+      if (currentGeneration === generation.current) report(e);
     } finally {
-      setSwitchBusy(false);
+      if (currentGeneration === generation.current) setSwitchBusy(false);
     }
   }
   const banners = (
@@ -545,7 +671,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         reload: () => reloadRef.current(),
         testSound: unlock,
         toggleAccepting: () => {
-          if (switchBusy || store?.status === "suspended") return;
+          if (!canWrite() || switchBusy) return;
           if (store?.is_accepting_orders) setPauseConfirm(true);
           else void accepting(true);
         },
@@ -563,6 +689,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         <ConfirmDialog
           title="关闭后顾客不能下单，确定暂停接单？"
           busy={switchBusy}
+          disabled={store?.status === "suspended"}
           onConfirm={() => void accepting(false)}
           onClose={() => setPauseConfirm(false)}
         />
@@ -571,7 +698,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         <Toast>
           {toast}
           {retry && (
-            <Button variant="secondary" onClick={retry}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (canWrite()) retry();
+              }}
+            >
               重试
             </Button>
           )}
