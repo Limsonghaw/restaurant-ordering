@@ -23,12 +23,12 @@ describe("公共纯函数", () => {
     expect(countdownRemaining(2001, 1000)).toBe(2);
     expect(countdownRemaining(0, 1000)).toBe(0);
   });
-  it("错误码固定文案与未知文案保留", () => {
+  it("错误码固定文案与未知错误使用通用文案", () => {
     expect(errorMessage(new DataError("TABLE_INVALID", "x"))).toBe(
       "这个二维码已失效，请联系店员",
     );
     expect(errorMessage(new DataError("NOT_IMPLEMENTED", "未实现"))).toBe(
-      "未实现",
+      "操作没有成功，请稍后再试",
     );
     expect(Object.keys(goneMessages)).toEqual([
       "bill_paid",

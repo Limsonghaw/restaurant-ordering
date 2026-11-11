@@ -30,11 +30,13 @@ function loadScript() {
 }
 // 调用方每次提交后改变 resetKey；组件仅传递令牌、失效和重置事件。
 export function Captcha({
+  action,
   onToken,
   onExpire,
   onReset,
   resetKey,
 }: {
+  action: "place_order" | "signup" | "login" | "recover" | "resend";
   onToken: (token: string) => void;
   onExpire: () => void;
   onReset?: () => void;
@@ -60,6 +62,7 @@ export function Captcha({
           if (!cancelled && container.current)
             widget = window.turnstile!.render(container.current, {
               sitekey: key,
+              action,
               callback: (token: string) => callbacks.current.onToken(token),
               "expired-callback": () => callbacks.current.onExpire(),
               "error-callback": () => callbacks.current.onExpire(),
@@ -70,7 +73,7 @@ export function Captcha({
       cancelled = true;
       if (widget) window.turnstile?.remove(widget);
     };
-  }, [key, resetKey]);
+  }, [key, resetKey, action]);
   return key ? (
     <div ref={container} />
   ) : process.env.NEXT_PUBLIC_DATA_SOURCE !== "mock" ? (
