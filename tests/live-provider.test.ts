@@ -403,3 +403,114 @@ it("refreshes processed orders and never displays backend messages on block fail
   render();
   expect(nodes("toast")[0].props.children).toContain("操作没有成功，请重试");
 });
+
+it.each(["write", "session"])(
+  "keeps suspension after an older pull returns active (%s)",
+  async (source) => {
+    let resolve!: (value: typeof activeStore) => void;
+    api.getStoreStatus.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const stale = render();
+    stale.toggleAccepting();
+    render();
+    const confirm = nodes("confirm")[0].props.onConfirm as () => void;
+    document.dispatchEvent(new Event("visibilitychange"));
+    if (source === "write") {
+      api.blockClientFromOrder.mockRejectedValueOnce(
+        new DataError("STORE_SUSPENDED", "private"),
+      );
+      await stale.block(order);
+    } else {
+      sessionChanged({
+        ...session,
+        store: { ...session.store!, status: "suspended" },
+      });
+    }
+    resolve(activeStore);
+    await flush();
+    expect(render().store?.status).toBe("suspended");
+    expect(nodes("shell")[0].props.storeStatus).toBe("suspended");
+    expect(await stale.change(order, { to: "accepted", expected: "new" })).toBe(
+      false,
+    );
+    expect(await stale.block(order)).toBe(false);
+    confirm();
+    stale.toggleAccepting();
+    expect(api.updateOrderStatus).not.toHaveBeenCalled();
+    expect(api.setAcceptingOrders).not.toHaveBeenCalled();
+    expect(api.blockClientFromOrder).toHaveBeenCalledTimes(
+      source === "write" ? 1 : 0,
+    );
+  },
+);
+it("does not restore toast after block reports UNAUTHENTICATED", async () => {
+  api.blockClientFromOrder.mockRejectedValueOnce(
+    new DataError("UNAUTHENTICATED", "secret"),
+  );
+  expect(await render().block(order)).toBe(false);
+  await flush();
+  expect(render().started).toBe(false);
+  expect(render().orders).toEqual([]);
+  expect(nodes("toast")).toHaveLength(0);
+});
+it("ignores an older accepting response after suspension", async () => {
+  let resolve!: (value: typeof activeStore) => void;
+  api.setAcceptingOrders.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  render().toggleAccepting();
+  render();
+  (nodes("confirm")[0].props.onConfirm as () => void)();
+  sessionChanged({
+    ...session,
+    store: { ...session.store!, status: "suspended" },
+  });
+  resolve(activeStore);
+  await flush();
+  expect(render().store?.status).toBe("suspended");
+});
+
+it("adopts store reads by issue order across reload and change events", async () => {
+  let resolve!: (value: typeof activeStore) => void;
+  api.getStoreStatus.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  render().reload();
+  await flush();
+  api.getStoreStatus.mockResolvedValueOnce({
+    ...activeStore,
+    is_accepting_orders: false,
+  });
+  window.dispatchEvent(new Event("ro-mock:change"));
+  await flush();
+  expect(render().store?.is_accepting_orders).toBe(false);
+  resolve(activeStore);
+  await flush();
+  expect(render().store?.is_accepting_orders).toBe(false);
+});
+it("fences old store reads on reset and accepts the new session store", async () => {
+  let resolve!: (value: typeof activeStore) => void;
+  api.getStoreStatus.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  window.dispatchEvent(new Event("ro-mock:change"));
+  session = { ...session, user_id: "user-b" };
+  sessionChanged(session);
+  await flush();
+  api.getStoreStatus.mockResolvedValue({ ...activeStore, name: "新店" });
+  render().start();
+  await flush();
+  resolve(activeStore);
+  await flush();
+  expect(render().started).toBe(true);
+  expect(render().store?.name).toBe("新店");
+});

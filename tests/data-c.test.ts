@@ -391,3 +391,16 @@ it("并发复用同一 captcha 也只能发送一次", async () => {
     "CAPTCHA_FAILED",
   );
 });
+
+it("注册和找回对已有/新账号都成功且不建立会话", async () => {
+  const d = await data();
+  for (const send of [d.sendSignUpOtp, d.requestPasswordReset]) {
+    const results = [];
+    for (const email of ["owner@demo.test", "brand-new@demo.test"]) {
+      results.push(await finish(send({ email }, captcha())));
+      expect(await finish(d.getSession())).toBeNull();
+    }
+    expect(results[0]).toEqual(results[1]);
+    vi.advanceTimersByTime(60001);
+  }
+});

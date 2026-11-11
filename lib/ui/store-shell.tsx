@@ -9,7 +9,7 @@ import {
   type Session,
   type StoreStatus,
 } from "../data";
-import { errorMessage } from "../format";
+import { liveErrorMessage } from "./live-errors";
 import { storeNavigation, routes } from "../routes";
 import { Banner, ErrorState, Modal, Skeleton } from "./common";
 export function StoreShell({
@@ -73,7 +73,7 @@ export function StoreShell({
       </aside>
       <div className="store-main">
         {error ? (
-          <ErrorState message={errorMessage(error)} retry={load} />
+          <ErrorState message={liveErrorMessage(error)} retry={load} />
         ) : session === undefined ? (
           <Skeleton />
         ) : (

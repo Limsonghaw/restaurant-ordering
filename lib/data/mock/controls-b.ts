@@ -1,6 +1,11 @@
-import type { LiveMockAction, LiveMockSettings } from "../types";
+import {
+  DataError,
+  type LiveMockAction,
+  type LiveMockSettings,
+} from "../types";
 import { allLiveOrders, readLive, saveLive } from "./live-state";
 import { readState, saveState } from "./state";
+import { storeContext } from "./menu-c";
 export async function getLiveMockSettings(): Promise<LiveMockSettings> {
   return readLive().settings;
 }
@@ -12,6 +17,14 @@ export async function configureLiveMock(patch: Partial<LiveMockSettings>) {
 }
 export async function runLiveMockAction(action: LiveMockAction) {
   readLive();
+  const storeId = await storeContext().catch((error: unknown) => {
+    if (
+      error instanceof DataError &&
+      ["UNAUTHENTICATED", "FORBIDDEN"].includes(error.code)
+    )
+      return readState().stores[0].id;
+    throw error;
+  });
   if (["disconnect", "reconnect"].includes(action)) {
     await configureLiveMock(
       action === "disconnect"
@@ -24,9 +37,11 @@ export async function runLiveMockAction(action: LiveMockAction) {
     const count = action === "three" ? 3 : action === "missed" ? 2 : 1;
     for (let n = 0; n < count; n++) {
       const state = readState();
-      const table = state.tables.filter(
-        (t) => t.store_id === "store-0" && t.active,
-      )[Math.floor(Math.random() * 8)];
+      const tables = state.tables.filter(
+        (t) => t.store_id === storeId && t.active,
+      );
+      const table = tables[Math.floor(Math.random() * tables.length)];
+      if (!table) continue;
       let bill = state.bills.find(
         (b) => b.table_id === table.id && b.status === "open",
       );
@@ -42,9 +57,10 @@ export async function runLiveMockAction(action: LiveMockAction) {
       }
       const items = state.items.filter(
         (i) =>
-          i.store_id === "store-0" && !i.hidden && !i.deleted && !i.is_sold_out,
+          i.store_id === storeId && !i.hidden && !i.deleted && !i.is_sold_out,
       );
-      const start = Math.floor(Math.random() * (items.length - 3));
+      if (!items.length) continue;
+      const start = Math.floor(Math.random() * Math.max(1, items.length - 2));
       const lines = items
         .slice(start, start + 1 + Math.floor(Math.random() * 3))
         .map((i) => ({
@@ -71,7 +87,7 @@ export async function runLiveMockAction(action: LiveMockAction) {
       saveState(state);
     }
   } else {
-    const orders = allLiveOrders().sort((a, b) =>
+    const orders = allLiveOrders(storeId).sort((a, b) =>
       a.created_at.localeCompare(b.created_at),
     );
     const order = orders.find(
@@ -83,7 +99,7 @@ export async function runLiveMockAction(action: LiveMockAction) {
     if (action === "paid") bill.status = "paid";
     else bill.orders.find((o) => o.id === order.id)!.status = "accepted";
     saveState(state);
-    const updated = allLiveOrders().find((o) => o.id === order.id)!;
+    const updated = allLiveOrders(storeId).find((o) => o.id === order.id)!;
     if (action === "other_silent") {
       const live = readLive();
       live.silent[order.id] = updated.updated_at;
