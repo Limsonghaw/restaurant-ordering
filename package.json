@@ -14,7 +14,8 @@
     "test": "vitest run",
     "format": "prettier --write .",
     "test:db:unit": "node supabase/tests/run-unit.mjs",
-    "test:db": "supabase test db supabase/tests/database/security.test.sql && supabase test db supabase/tests/database/auth_roles.test.sql --db-url postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres"
+    "test:db": "supabase test db supabase/tests/database/security.test.sql && supabase test db supabase/tests/database/auth_roles.test.sql --db-url postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres",
+    "db:local-customer-password": "node scripts/set-local-customer-api-password.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "./api/errors";
+import { isLocalMemoryRateLimitEnabled, isNonLocalEnv } from "./env";
 export interface RateLimiter {
   hit(key: string, windowMs: number): Promise<number>;
 }
@@ -52,6 +53,21 @@ export class RedisRateLimiter implements RateLimiter {
   }
 }
 export const rateLimiter: RateLimiter = new RedisRateLimiter();
+const memoryRateLimiter = new MemoryRateLimiter();
+function upstashConfigured() {
+  return !!(
+    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  );
+}
+/** Local-only. Never used when hosted or when Upstash is configured. */
+export function memoryRateLimitActive(): boolean {
+  return (
+    isLocalMemoryRateLimitEnabled() && !isNonLocalEnv() && !upstashConfigured()
+  );
+}
+export function getRateLimiter(): RateLimiter {
+  return memoryRateLimitActive() ? memoryRateLimiter : rateLimiter;
+}
 export const scopes = {
   orderProbeDevice: [30, 60000],
   orderProbeIp: [60, 60000],
@@ -69,7 +85,7 @@ export const scopes = {
 export async function limit(
   scope: keyof typeof scopes,
   key: string,
-  limiter = rateLimiter,
+  limiter = getRateLimiter(),
 ): Promise<boolean> {
   const [maximum, window] = scopes[scope];
   let count: number;
