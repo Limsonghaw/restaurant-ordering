@@ -5,7 +5,7 @@ begin;
 -- Statements under test still run with the target role's own privileges / RLS.
 grant customer_api, authenticated, anon to postgres;
 create extension if not exists pgtap with schema extensions;
-select plan(51);
+select plan(87);
 
 insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data)
 values ('aaaa0000-0000-4000-8000-000000000001', 'security-a@example.invalid', now(), '{}'),
@@ -105,5 +105,37 @@ cross join lateral (values
  ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.png/..','23514'),
  ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.svg','23514')
 ) as paths(p,expected);
+-- F-8: append coverage without removing the original path matrix.
+select is(pg_temp.pr2_path(t,c,p),expected,c||': F-8 '||p)
+from (values ('stores','logo_path','logo',''),('items','image_path','items',''),('items','thumb_path','items','_thumb')) as columns(t,c,d,s)
+cross join lateral (values
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||E'.png\n','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||E'/\n11111111-1111-4111-8111-111111111111'||s||'.png','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||upper(d)||'/11111111-1111-4111-8111-111111111111'||s||'.png','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'||s||'.png','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.PNG','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.png.webp','23514'),
+ ((select store_id::text from fixture)||'/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.png','23514'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.jpg','ok'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.jpeg','ok'),
+ ('cccc0000-0000-4000-8000-000000000002/'||d||'/11111111-1111-4111-8111-111111111111'||s||'.png','ok')
+) as paths(p,expected);
+
+-- L-9: inspect all four exact function identities as customer_api after SET 60s.
+-- Catalog assertions are intentional: no wall-clock timeout claim from pg_sleep.
+select is(pg_temp.as_role('customer_api', $sql$
+ select set_config('statement_timeout', '60s', true)
+$sql$), '1min', 'customer session can request 60 seconds');
+select is(pg_temp.as_role('customer_api', format(
+ 'select (%L = any(proconfig))::text from pg_proc where oid = %L::regprocedure',
+ 'statement_timeout=3s', signature)), 'true', signature||' retains function timeout')
+from (values
+ ('public.customer_get_menu(uuid,uuid,integer)'),
+ ('public.customer_quote(uuid,uuid,integer,jsonb)'),
+ ('public.customer_place_order(uuid,uuid,integer,uuid,text,jsonb,text,text,text,text,boolean)'),
+ ('public.customer_get_bill(uuid,uuid,integer,text,text)')
+) as functions(signature);
+select throws_ok($assert$select pg_temp.as_role('customer_api', $$create temp table l9_forbidden(id integer)$$)$assert$,
+ '42501', null, 'customer_api cannot create temporary tables');
 select * from finish();
 rollback;
