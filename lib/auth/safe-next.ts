@@ -11,7 +11,7 @@ export function safeNext(next: string | null): string {
     if (url.origin !== new URL(origin).origin || url.username || url.password)
       return "/store";
     const p = url.pathname;
-    if (/%(?:2f|5c|2e)/i.test(p)) return "/store";
+    if (/%(?:25|2f|5c|2e|0[0-9a-f]|1[0-9a-f]|20|7f)/i.test(p)) return "/store";
     return p === "/reset-password" ||
       p === "/set-password" ||
       p === "/store" ||

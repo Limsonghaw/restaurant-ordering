@@ -1,27 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { evaluateAccess, type AuthState } from "./lib/auth/guard";
-import { DataError } from "./lib/data/types";
-// Backend PR2 supplies getAuthState via getClaims() + get_my_context.
-// Mock identity lives in browser storage; it must never be read by proxy.
-async function pendingAuthState(): Promise<AuthState> {
-  throw new DataError("NOT_IMPLEMENTED", "未实现");
-}
+import { evaluateAccess, getAuthState } from "./lib/auth/guard";
+import { createClient } from "./lib/supabase/middleware";
 export async function proxy(request: NextRequest) {
   if (process.env.NEXT_PUBLIC_DATA_SOURCE === "mock")
     return NextResponse.next();
+  let bridge: ReturnType<typeof createClient> | undefined;
   try {
+    bridge = createClient(request);
     const decision = evaluateAccess(
-      request.nextUrl.pathname,
-      await pendingAuthState(),
+      request.nextUrl.pathname + request.nextUrl.search,
+      await getAuthState(bridge.supabase),
     );
-    return decision.allow
-      ? NextResponse.next()
-      : NextResponse.redirect(new URL(decision.to, request.url));
+    return bridge.respond(
+      decision.allow
+        ? undefined
+        : NextResponse.redirect(new URL(decision.to, request.url)),
+    );
   } catch {
-    return new NextResponse("未实现", {
+    const response = new NextResponse("服务暂时不可用", {
       status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      headers: { "Cache-Control": "no-store" },
     });
+    return bridge ? bridge.respond(response) : response;
   }
 }
 export const config = {

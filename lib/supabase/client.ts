@@ -4,9 +4,9 @@ import { createBrowserClient } from "@supabase/ssr";
 
 export function createClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) {
     throw new Error("请配置 Supabase 公开环境变量");
   }
-  return createBrowserClient(url, key);
+  return createBrowserClient(url, key, { cookieOptions: { sameSite: "lax", secure: process.env.NODE_ENV === "production" } });
 }
