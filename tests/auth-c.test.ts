@@ -251,3 +251,27 @@ it("账号已存在类错误与成功发送返回相同结果，注册和找回�
     }),
   ).rejects.toMatchObject({ code: "NETWORK" });
 });
+
+describe("F-1 malformed context fails closed", () => {
+  it.each([
+    undefined,
+    [],
+    "invalid",
+    {},
+    { platform_role: "platform_admin", store: null },
+    { platform_role: "platform_admin", aal: "AAL2", store: null },
+    { platform_role: "unknown", aal: "aal2", store: null },
+    { platform_role: null, aal: "aal1", store: {} },
+    { platform_role: "merchant", aal: "aal1", store: { id: "a" } },
+    { platform_role: "merchant", aal: "aal1", store: { status: "active" } },
+    {
+      platform_role: "merchant",
+      aal: "aal1",
+      store: { id: "a", status: "unknown" },
+    },
+  ])("rejects %j", (ctx) => {
+    expect(() => toAuthState(ctx as MyContext)).toThrow(
+      "Invalid get_my_context response",
+    );
+  });
+});

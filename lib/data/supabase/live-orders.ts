@@ -46,16 +46,29 @@ export async function fetchOrdersUpdatedSince(
   since: string,
 ): Promise<LiveOrder[]> {
   const { client, id } = await ordersQuery();
-  return result(
-    client
+  const floor = malaysiaDay().start - 30000;
+  const parsed = Date.parse(since);
+  if (!Number.isFinite(parsed)) throw dataError("VALIDATION_FAILED");
+  const lower = new Date(Math.max(floor, parsed)).toISOString();
+  const rows: LiveOrder[] = [];
+  let cursor: LiveOrder | undefined;
+  for (;;) {
+    let query = client
       .from("orders")
       .select(ORDER_COLUMNS)
       .eq("store_id", id)
-      .gt("updated_at", since)
-      .order("updated_at")
-      .order("id")
-      .returns<LiveOrder[]>(),
-  );
+      .gt("updated_at", lower);
+    if (cursor)
+      query = query.or(
+        `updated_at.gt.${cursor.updated_at},and(updated_at.eq.${cursor.updated_at},id.gt.${cursor.id})`,
+      );
+    const page = await result<LiveOrder[]>(
+      query.order("updated_at").order("id").limit(500).returns<LiveOrder[]>(),
+    );
+    rows.push(...page);
+    if (page.length < 500) return rows;
+    cursor = page[page.length - 1];
+  }
 }
 export async function updateOrderStatus(
   order_id: string,
@@ -138,8 +151,22 @@ export function subscribeStoreOrders(
     cleanup = () => {
       void client.removeChannel(channel);
     };
-    let watermark = Date.now();
-    const refresh = async (orderId?: string, insert = false, billId?: string) => {
+    const initial = await fetchOrdersUpdatedSince(
+      new Date(malaysiaDay().start - 30000).toISOString(),
+    );
+    let watermark = initial.reduce(
+      (max, row) => Math.max(max, Date.parse(row.updated_at)),
+      malaysiaDay().start - 30000,
+    );
+    if (stopped) {
+      cleanup();
+      return;
+    }
+    const refresh = async (
+      orderId?: string,
+      insert = false,
+      billId?: string,
+    ) => {
       if (stopped) return;
       try {
         let query = client
@@ -148,15 +175,22 @@ export function subscribeStoreOrders(
           .eq("store_id", store_id);
         if (orderId) query = query.eq("id", orderId);
         else if (billId) query = query.eq("bill_id", billId);
-        else query = query.gt("updated_at", new Date(watermark - 30000).toISOString());
-        const rows = await result<LiveOrder[]>(query.returns<LiveOrder[]>());
+        const rows =
+          !orderId && !billId
+            ? await fetchOrdersUpdatedSince(
+                new Date(watermark - 30000).toISOString(),
+              )
+            : await result<LiveOrder[]>(query.returns<LiveOrder[]>());
         if (!stopped)
           for (const row of rows) {
             const time = Date.parse(row.updated_at);
             if (Number.isFinite(time)) watermark = Math.max(watermark, time);
             const { start, end } = malaysiaDay();
             const created = Date.parse(row.created_at);
-            if (["new", "accepted"].includes(row.status) || (created >= start && created < end))
+            if (
+              ["new", "accepted"].includes(row.status) ||
+              (created >= start && created < end)
+            )
               (insert ? callbacks.onInsert : callbacks.onUpdate)(row);
           }
       } catch {
@@ -190,8 +224,13 @@ export function subscribeStoreOrders(
           filter: "store_id=eq." + store_id,
         },
         (payload) => {
-          void refresh(undefined, false,
-            payload.new && "id" in payload.new ? String(payload.new.id) : undefined);
+          void refresh(
+            undefined,
+            false,
+            payload.new && "id" in payload.new
+              ? String(payload.new.id)
+              : undefined,
+          );
         },
       )
       .subscribe((status) => {
