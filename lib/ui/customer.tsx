@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DataError,
   getTableMenu,
+  imageUrl,
   getTableBill,
   quoteCart,
   placeOrder,
@@ -44,6 +45,11 @@ import {
   Toast,
 } from "./common";
 import { Captcha } from "./captcha";
+export function logoUrl(path: string | null) {
+  return path && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)
+    ? (imageUrl(path) ?? "/mock/logo.svg")
+    : "/mock/logo.svg";
+}
 function Header({
   menu,
   code,
@@ -64,7 +70,7 @@ function Header({
             height={46}
             unoptimized
             className="logo"
-            src={menu.store.logo_path ?? "/mock/logo.svg"}
+            src={logoUrl(menu.store.logo_path)}
             alt=""
           />
         )}
@@ -223,11 +229,7 @@ export function MenuPage({ code }: { code: string }) {
     return (
       <ErrorState
         message={
-          seconds
-            ? `操作太频繁，请 ${seconds} 秒后再试`
-            : error instanceof DataError && error.code === "NOT_IMPLEMENTED"
-              ? error.message
-              : "菜单加载失败，请检查网络后重试"
+          seconds ? `操作太频繁，请 ${seconds} 秒后再试` : errorMessage(error)
         }
         retry={() => {
           if (!seconds) void load();
@@ -882,6 +884,7 @@ export function CartPage({ code }: { code: string }) {
                   : "请先完成人机验证"}
               </Banner>
               <Captcha
+                action="place_order"
                 key={captchaReset}
                 resetKey={captchaReset}
                 onToken={(token) => void submit(token)}
@@ -1045,11 +1048,7 @@ export function OrdersPage({ code }: { code: string }) {
     return error ? (
       <ErrorState
         message={
-          seconds
-            ? `操作太频繁，请 ${seconds} 秒后再试`
-            : error instanceof DataError && error.code === "NOT_IMPLEMENTED"
-              ? error.message
-              : "订单加载失败，请检查网络后重试"
+          seconds ? `操作太频繁，请 ${seconds} 秒后再试` : errorMessage(error)
         }
         retry={() => {
           if (!seconds) setRevision((n) => n + 1);

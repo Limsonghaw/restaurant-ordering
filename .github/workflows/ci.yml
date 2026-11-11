@@ -32,18 +32,24 @@ jobs:
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync } from 'node:fs';
           import { join } from 'node:path';
-          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok|ro-mock:live-b|mock-live-device/;
+          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok|ro-mock:live-b|mock-live-device|ro-mock:auth-c-v1|ro-mock:upload-probe|切换模拟身份|@demo\.test/;
           function check(directory) {
+            let count = 0;
             for (const entry of readdirSync(directory, { withFileTypes: true })) {
               const path = join(directory, entry.name);
-              if (entry.isDirectory()) check(path);
-              else if (/\.(js|html)$/.test(entry.name) && forbidden.test(readFileSync(path, 'utf8'))) {
-                throw new Error(`Mock code found in ${path}`);
+              if (entry.isDirectory()) count += check(path);
+              else if (/\.(js|html)$/.test(entry.name)) {
+                count++;
+                if (forbidden.test(readFileSync(path, 'utf8'))) throw new Error(`Mock code found in ${path}`);
               }
             }
+            return count;
           }
-          check('.next/static');
-          check('.next/server/app');
+          for (const directory of ['.next/static', '.next/server/app', '.next/server/chunks']) {
+            const count = check(directory);
+            if (count === 0) throw new Error(`No js/html files scanned in ${directory}`);
+            console.log(`${directory}: scanned ${count} js/html files`);
+          }
           NODE
       - name: Clear production build before mock build
         run: rm -rf .next

@@ -218,3 +218,36 @@ describe("输入边界", () => {
     expect(() => normalizePhone("+6591234567")).toThrow("暂不支持");
   });
 });
+
+// 注册/找回发送的公开结果一致；未知错误仍失败，不能读原始 message。
+it("账号已存在类错误与成功发送返回相同结果，注册和找回共用同一分支", async () => {
+  const { sendWithoutEnumeration } = await import("../lib/ui/auth-c");
+  const { DataError } = await import("../lib/data/types");
+  const success = await sendWithoutEnumeration(async () => ({ sent: true }));
+  for (const code of [
+    "USER_ALREADY_EXISTS",
+    "USER_ALREADY_REGISTERED",
+    "EMAIL_EXISTS",
+    "PHONE_EXISTS",
+  ]) {
+    const error = new DataError(
+      code as import("../lib/data/types").ErrorCode,
+      "private",
+    );
+    Object.defineProperty(error, "message", {
+      get() {
+        throw Error("must not read message");
+      },
+    });
+    expect(
+      await sendWithoutEnumeration(async () => {
+        throw error;
+      }),
+    ).toBe(success);
+  }
+  await expect(
+    sendWithoutEnumeration(async () => {
+      throw new DataError("NETWORK", "private");
+    }),
+  ).rejects.toMatchObject({ code: "NETWORK" });
+});

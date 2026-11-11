@@ -1,5 +1,6 @@
 "use client";
 import Image from "next/image";
+import { menuFieldErrors, uploadError } from "./error-messages";
 import { useUnsavedChanges } from "./unsaved-c";
 import { useCallback, useEffect, useState, type DragEvent } from "react";
 import {
@@ -214,8 +215,7 @@ export function MenuManagement() {
       setMessage("已保存");
       await load();
     } catch (e) {
-      if (e instanceof DataError && e.details.field)
-        setFields({ [String(e.details.field)]: e.message });
+      setFields(menuFieldErrors(e));
       setMessage("保存没有成功，请重试");
     } finally {
       setBusy(false);
@@ -243,7 +243,7 @@ export function MenuManagement() {
     } catch (e) {
       setFields((f) => ({
         ...f,
-        image: e instanceof DataError ? e.message : "上传失败，请重试",
+        image: uploadError(e),
       }));
     } finally {
       setUploading(false);

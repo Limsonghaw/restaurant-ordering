@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
+import {
+  PHASE_DEVELOPMENT_SERVER,
+  PHASE_PRODUCTION_BUILD,
+} from "next/constants";
 import config from "../next.config";
 
 beforeEach(() => {
+  vi.stubEnv("VERCEL", "1");
   vi.stubEnv("VERCEL_ENV", "");
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "supabase");
@@ -11,10 +15,15 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("M-1 数据源必须显式选择", () => {
-  it.each([undefined, "", "SUPABASE", "typo", " supabase", "supabase "])("拒绝数据源 %s", (source) => {
-    vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", source);
-    expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow("NEXT_PUBLIC_DATA_SOURCE");
-  });
+  it.each([undefined, "", "SUPABASE", "typo", " supabase", "supabase "])(
+    "拒绝数据源 %s",
+    (source) => {
+      vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", source);
+      expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow(
+        "NEXT_PUBLIC_DATA_SOURCE",
+      );
+    },
+  );
   it("正式站点拒绝 mock，但预览可显式使用 mock", () => {
     vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "mock");
     expect(config(PHASE_PRODUCTION_BUILD)).toBeDefined();
@@ -34,7 +43,9 @@ describe("M-1 数据源必须显式选择", () => {
 
 describe("L-1 非 Vercel 生产构建 Turnstile 护栏", () => {
   it.each([
-    undefined, "", "   ",
+    undefined,
+    "",
+    "   ",
     "1x00000000000000000000AA",
     "2x00000000000000000000AB",
     "3x00000000000000000000FF",
@@ -83,4 +94,44 @@ describe("N-1 预览和 mock 构建的 Turnstile 配置", () => {
       expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow("Turnstile");
     },
   );
+});
+
+it.each([
+  "PRODUCTION",
+  "Production",
+  " production",
+  "production ",
+  "prod",
+  "custom",
+])("R-2 正式环境变体 %s 拒绝 mock", (environment) => {
+  vi.stubEnv("VERCEL_ENV", environment);
+  vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "mock");
+  expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow("正式站点");
+});
+it("R-1 非 Vercel preview 不豁免生产 key 和 mock 护栏", () => {
+  vi.stubEnv("VERCEL", "");
+  vi.stubEnv("VERCEL_ENV", "preview");
+  vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "");
+  expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow("Turnstile");
+  vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "mock");
+  expect(() => config(PHASE_PRODUCTION_BUILD)).toThrow("正式站点");
+});
+it("L-2 保留安全响应头和 CSP，关闭框架头", async () => {
+  const result = config(PHASE_PRODUCTION_BUILD);
+  expect(result.poweredByHeader).toBe(false);
+  const headers = (await result.headers!())[0].headers;
+  expect(headers).toEqual(
+    expect.arrayContaining([
+      {
+        key: "Permissions-Policy",
+        value: "camera=(), microphone=(), geolocation=()",
+      },
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+    ]),
+  );
+  expect(
+    headers.find((h) => h.key === "Content-Security-Policy")?.value,
+  ).toContain("frame-ancestors 'none'");
 });

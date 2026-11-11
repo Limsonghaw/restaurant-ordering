@@ -3,6 +3,7 @@ import Link from "next/link";
 import { routes } from "../routes";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { authFieldErrors } from "./error-messages";
 import { Captcha } from "./captcha";
 import {
   getSession,
@@ -31,26 +32,46 @@ export const resetDescriptions = {
     "我们会给这个号码发一条 6 位验证码，输入后设置新密码。如果这个号码还没有账号，输入验证码后会用它开通一个新账号和店铺（店名之后在店铺设置里填写），需要先设置密码；没输入的话 24 小时后自动作废。",
 };
 export function authError(e: unknown) {
-  if (!(e instanceof DataError)) return "网络出错，请重试";
-  return (
-    (
-      {
-        PHONE_NOT_SUPPORTED: "暂不支持这个国家或地区的手机号，请改用邮箱",
-        SMS_SEND_FAILED: "短信发送失败，请改用邮箱或稍后再试",
-        CAPTCHA_FAILED: "人机验证失败，请重试",
-        CAPTCHA_REQUIRED: "人机验证失败，请重试",
-        RATE_LIMITED: "请稍后再试",
-        INVALID_CREDENTIALS: "账号或密码不正确",
-        EMAIL_NOT_CONFIRMED: "请先完成验证",
-        PHONE_NOT_CONFIRMED: "请先完成验证",
-        NETWORK: "网络出错，请重试",
-        FORBIDDEN: "请求被拒绝，请刷新页面后重试",
-        UNSUPPORTED_MEDIA_TYPE: "请求被拒绝，请刷新页面后重试",
-        WEAK_PASSWORD: "密码至少 8 位，需包含字母和数字",
-        REAUTH_REQUIRED: "为了安全，请重新验证",
-      } as Record<string, string>
-    )[e.code] ?? e.message
-  );
+  const messages: Record<string, string> = {
+    PHONE_NOT_SUPPORTED: "暂不支持这个国家或地区的手机号，请改用邮箱",
+    SMS_SEND_FAILED: "短信发送失败，请改用邮箱或稍后再试",
+    CAPTCHA_FAILED: "人机验证失败，请重试",
+    CAPTCHA_REQUIRED: "人机验证失败，请重试",
+    RATE_LIMITED: "请稍后再试",
+    INVALID_CREDENTIALS: "账号或密码不正确",
+    EMAIL_NOT_CONFIRMED: "请先完成验证",
+    PHONE_NOT_CONFIRMED: "请先完成验证",
+    NETWORK: "网络出错，请重试",
+    FORBIDDEN: "请求被拒绝，请刷新页面后重试",
+    UNSUPPORTED_MEDIA_TYPE: "请求被拒绝，请刷新页面后重试",
+    WEAK_PASSWORD: "密码至少 8 位，需包含字母和数字",
+    REAUTH_REQUIRED: "为了安全，请重新验证",
+    OTP_INVALID: "验证码不正确或已失效，请重新输入",
+    RESET_LINK_INVALID: "链接已失效",
+    VALIDATION_FAILED: "请检查填写的内容",
+    UNAUTHENTICATED: "请重新登录",
+  };
+  return e instanceof DataError && Object.hasOwn(messages, e.code)
+    ? messages[e.code]
+    : "操作没有成功，请稍后再试";
+}
+
+// 已存在的账号与发送成功进入同一个界面分支，不暴露账号是否存在。
+export async function sendWithoutEnumeration(send: () => Promise<unknown>) {
+  try {
+    await send();
+  } catch (error) {
+    if (
+      !(error instanceof DataError) ||
+      ![
+        "USER_ALREADY_EXISTS",
+        "USER_ALREADY_REGISTERED",
+        "EMAIL_EXISTS",
+        "PHONE_EXISTS",
+      ].includes(error.code)
+    )
+      throw error;
+  }
 }
 export function AuthPage({
   mode,
@@ -202,7 +223,7 @@ export function AuthPage({
     if (e instanceof DataError) {
       setErrorCode(e.code);
       if (e.code === "VALIDATION_FAILED" && !passwordMode)
-        setFieldErrors({ account: e.message });
+        setFieldErrors(authFieldErrors(e));
       if (e.code === "WEAK_PASSWORD")
         setFieldErrors({ password: "密码至少 8 位，需包含字母和数字" });
       if (e.code === "PHONE_NOT_SUPPORTED" || e.code === "SMS_SEND_FAILED")
@@ -216,11 +237,11 @@ export function AuthPage({
     setErrorCode("");
     try {
       const c = verify && phone ? { phone } : contact();
-      await (
-        forgot || (verify && next === routes.resetPassword)
+      await sendWithoutEnumeration(() =>
+        (forgot || (verify && next === routes.resetPassword)
           ? requestPasswordReset
-          : sendSignUpOtp
-      )(c, { captcha_token: token });
+          : sendSignUpOtp)(c, { captcha_token: token }),
+      );
       sessionStorage.setItem("auth_contact", c.email ?? c.phone!);
       setSeconds(60);
       setSent(true);
@@ -337,6 +358,15 @@ export function AuthPage({
   }
   const captcha = (
     <Captcha
+      action={
+        verify
+          ? "resend"
+          : forgot
+            ? "recover"
+            : mode === "register"
+              ? "signup"
+              : "login"
+      }
       resetKey={reset}
       onToken={setToken}
       onExpire={() => setToken("")}
