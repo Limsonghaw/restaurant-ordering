@@ -68,8 +68,7 @@ const real = {
   getStoreHistory: (date: string): Promise<StoreHistory> =>
     loadStoreHistory(date),
   storeMockActionD: unavailable,
-  checkoutMockBill: unavailable,
-} satisfies typeof mock;
+} satisfies Omit<typeof mock, "checkoutMockBill">;
 export const {
   setStoreTableActive,
   listStoreBills,

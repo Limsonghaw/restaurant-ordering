@@ -158,3 +158,6 @@ it("delegates history and QR signing to supabase implementations", async () => {
   expect(api.getStoreHistory).toHaveBeenCalledWith("2026-11-11");
   expect(api.getStoreTableQrLinks).toHaveBeenCalledWith(["t"]);
 });
+it("does not export the mock-only checkout helper in real mode", () => {
+  expect("checkoutMockBill" in d).toBe(false);
+});
