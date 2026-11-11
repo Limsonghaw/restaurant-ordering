@@ -1,4 +1,5 @@
 export const ERRORS = {
+  PAYLOAD_TOO_LARGE: { status: 413, message: "请求内容超过 16 KB" },
   VALIDATION_FAILED: { status: 400, message: "输入内容不符合要求" },
   UNAUTHENTICATED: { status: 401, message: "未登录" },
   FORBIDDEN: { status: 403, message: "请求被拒绝，请刷新页面后重试" },
@@ -54,9 +55,21 @@ export const ERRORS = {
 } as const;
 export type AppCode = keyof typeof ERRORS;
 export class AppError extends Error {
-  constructor(public code: AppCode) {
+  constructor(
+    public code: AppCode,
+    public details?: Record<string, unknown>,
+  ) {
     super(ERRORS[code].message);
   }
+}
+function retryAfter(error: unknown): string {
+  const seconds =
+    error instanceof AppError ? error.details?.retry_after_seconds : undefined;
+  return String(
+    typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+      ? Math.min(3600, Math.max(1, Math.ceil(seconds)))
+      : 60,
+  );
 }
 export function toErrorResponse(error: unknown): Response {
   const code = error instanceof AppError ? error.code : "INTERNAL";
@@ -66,7 +79,9 @@ export function toErrorResponse(error: unknown): Response {
       status: ERRORS[code].status,
       headers: {
         "Cache-Control": "no-store",
-        ...(code === "RATE_LIMITED" ? { "Retry-After": "60" } : {}),
+        ...(code === "RATE_LIMITED"
+          ? { "Retry-After": retryAfter(error) }
+          : {}),
       },
     },
   );

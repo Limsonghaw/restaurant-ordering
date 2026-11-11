@@ -358,3 +358,59 @@ export interface DiningTable {
 export type StoreProfilePatch = Partial<Pick<Store,
   "name" | "logo_path" | "address" | "opening_hours" | "is_accepting_orders" | "service_charge_bp" | "sst_bp"
 >>;
+
+export type Pr4ErrorCode =
+  | "ORDER_STATUS_CONFLICT"
+  | "INVALID_STATUS_TRANSITION"
+  | "BILL_TOTAL_CHANGED"
+  | "BILL_ALREADY_PAID";
+export interface BillListRow extends BillAmounts {
+  id: string;
+  store_id: string;
+  table_id: string;
+  table_label: string;
+  status: "open" | "paid";
+  opened_at: string;
+  paid_at: string | null;
+  updated_at: string;
+  service_charge_bp: number;
+  sst_bp: number;
+  is_estimate: boolean;
+  order_count: number;
+  unserved_count: number;
+  currency: "MYR";
+}
+export interface BillFilters {
+  page?: number;
+  status?: "open" | "paid";
+  table_id?: string;
+  paid_from?: string;
+  paid_to?: string;
+}
+export interface BillPage {
+  bills: BillListRow[];
+  total: number;
+  page: number;
+  page_size: 20;
+}
+export interface BillDetail {
+  bill: BillListRow;
+  orders: LiveOrder[];
+}
+export interface CheckoutResult extends BillAmounts {
+  id: string;
+  status: "paid";
+  paid_at: string;
+  table_id: string;
+  tokens_revoked: number;
+}
+export interface PlaceOrderBody {
+  turnstile_token?: string;
+}
+
+// New merchant errors remain append-only alongside the original ErrorCode union.
+export type DataErrorCode = ErrorCode | MerchantErrorCode | Pr4ErrorCode | CustomerErrorCode;
+export interface CheckoutResult { service_charge_bp: number; sst_bp: number; is_estimate: false }
+
+// PR4 customer API extension; original ErrorCode stays frozen.
+export type CustomerErrorCode = "PAYLOAD_TOO_LARGE";
