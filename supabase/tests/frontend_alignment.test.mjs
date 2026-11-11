@@ -264,5 +264,27 @@ const bcCols = (await q(`select attname from pg_attribute where attrelid = 'publ
   and has_column_privilege('authenticated', 'public.blocked_clients'::regclass, attname, 'select') order by attname`)).map(r => r.attname);
 ok('v0.6 第 12 问 blocked_clients 可读列含 source_order_id、expires_at，不含 value_hash', ['id','kind','reason','source_order_id','created_at','expires_at'].every(c => bcCols.includes(c)) && !bcCols.includes('value_hash'), JSON.stringify(bcCols));
 
+// PR5 R8: exact Malaysian payment boundaries and cross-store isolation.
+await db.exec('begin');
+const paidFixture = async (sid, tid, time) => q(`insert into bills(store_id,table_id,status,paid_at,subtotal_cents,service_charge_cents,sst_cents,rounding_cents,total_cents)
+ values ($1,$2,'paid',$3,1000,100,66,-1,1165) returning id`, [sid,tid,time]);
+await paidFixture(S, F.t[0], '2026-01-20T23:59:00+08:00');
+await paidFixture(S, F.t[0], '2026-01-21T00:01:00+08:00');
+const otherTable = (await q(`insert into dining_tables(store_id,label) values ($1,'PR5') returning id`, [SL]))[0].id;
+await paidFixture(SL, otherTable, '2026-01-20T23:59:00+08:00');
+const daily = async (uid, date) => (await asUser(uid, () => q(`select get_store_daily_stats($1::date) r`, [date])))[0].r;
+const day20 = await daily(own, '2026-01-20');
+const day21 = await daily(own, '2026-01-21');
+ok('PR5 23:59 is paid day 20, 00:01 is paid day 21', day20.paid_bills.count === 1 && day21.paid_bills.count === 1);
+ok('PR5 all paid snapshot components and revenue preserved', (day20.paid_bills.subtotal_cents === 1000 && day20.paid_bills.service_charge_cents === 100 && day20.paid_bills.sst_cents === 66 && day20.paid_bills.rounding_cents === -1 && day20.revenue_cents === 1165));
+ok('PR5 daily stats metadata', day20.timezone === 'Asia/Kuala_Lumpur' && day20.currency === 'MYR' && day20.date === '2026-01-20');
+ok('PR5 other store only sees its own paid bill', (await daily(legacy, '2026-01-20')).paid_bills.count === 1 && (await daily(legacy, '2026-01-21')).revenue_cents === 0);
+const historyTable = (await q(`insert into dining_tables(store_id,label) values ($1,'PR5-history') returning id`, [S]))[0].id;
+const historyBill = (await q(`insert into bills(store_id,table_id) values ($1,$2) returning id`, [S,historyTable]))[0].id;
+const newOrder = (await q(`insert into orders(store_id,table_id,bill_id,seq_in_bill,subtotal_cents,item_count,request_id,created_at) values ($1,$2,$3,99,100,1,gen_random_uuid(),'2026-01-20T23:59:00+08:00') returning id`, [S,historyTable,historyBill]))[0];
+ok('PR5 created_at day stats include own order only', (await daily(own, '2026-01-20')).orders.count === 1 && (await daily(legacy, '2026-01-20')).orders.count === 0);
+ok('PR5 order RLS hides another store', (await asUser(legacy, () => q(`select id from orders where id=$1`, [newOrder.id]))).length === 0);
+await db.exec('rollback');
+
 console.log(`\n${pass} PASS / ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

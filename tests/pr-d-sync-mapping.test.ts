@@ -9,10 +9,14 @@ const api = vi.hoisted(() => ({
   rotateTableQr: vi.fn(),
   getStore: vi.fn(),
   updateStore: vi.fn(),
+  getStoreHistory: vi.fn(),
+  getStoreTableQrLinks: vi.fn(),
 }));
 vi.mock("../lib/data/bills", () => api);
 vi.mock("../lib/data/tables", () => api);
 vi.mock("../lib/data/store", () => api);
+vi.mock("../lib/data/supabase/history", () => api);
+vi.mock("../lib/data/supabase/table-qr", () => api);
 vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "supabase");
 const d = await import("../lib/data/d");
 beforeEach(() => vi.resetAllMocks());
@@ -120,11 +124,40 @@ it.each([
   api[name].mockRejectedValue(error);
   await expect(call()).rejects.toBe(error);
 });
-it("keeps history and QR signing unavailable", async () => {
-  await expect(d.getStoreHistory("2026-11-11")).rejects.toMatchObject({
-    code: "NOT_IMPLEMENTED",
-  });
-  await expect(d.getStoreTableQrLinks(["t"])).rejects.toMatchObject({
-    code: "NOT_IMPLEMENTED",
-  });
+it("delegates history and QR signing to supabase implementations", async () => {
+  const history = {
+    orders: [],
+    stats: {
+      date: "2026-11-11",
+      timezone: "Asia/Kuala_Lumpur",
+      currency: "MYR",
+      revenue_cents: 0,
+      paid_bills: {
+        count: 0,
+        subtotal_cents: 0,
+        service_charge_cents: 0,
+        sst_cents: 0,
+        rounding_cents: 0,
+        total_cents: 0,
+      },
+      open_bills: { count: 0, subtotal_cents: 0, total_cents: 0 },
+      orders: { count: 0, cancelled_count: 0 },
+    },
+  };
+  const links = [
+    {
+      table_id: "t",
+      label: "A1",
+      url: "https://site.example.invalid/t/signed",
+    },
+  ];
+  api.getStoreHistory.mockResolvedValue(history);
+  api.getStoreTableQrLinks.mockResolvedValue(links);
+  await expect(d.getStoreHistory("2026-11-11")).resolves.toEqual(history);
+  await expect(d.getStoreTableQrLinks(["t"])).resolves.toEqual(links);
+  expect(api.getStoreHistory).toHaveBeenCalledWith("2026-11-11");
+  expect(api.getStoreTableQrLinks).toHaveBeenCalledWith(["t"]);
+});
+it("does not export the mock-only checkout helper in real mode", () => {
+  expect("checkoutMockBill" in d).toBe(false);
 });

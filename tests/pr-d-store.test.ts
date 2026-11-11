@@ -424,7 +424,7 @@ describe("PR-D 补充契约", () => {
       details: { reason: "bill_paid" },
     });
   });
-  it("无店铺身份无权限，后端未提供的历史统计仍为未实现占位", async () => {
+  it("无店铺身份无权限；真实模式把订单记录交给后端实现", async () => {
     const d = await data();
     await d.authMockAction("identity", "nostore");
     await expect(finish(d.listStoreBills("open"))).rejects.toMatchObject({
@@ -432,11 +432,36 @@ describe("PR-D 补充契约", () => {
     });
     vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "supabase");
     vi.resetModules();
+    const getStoreHistory = vi.fn(async (date: string) => ({
+      orders: [],
+      stats: {
+        date,
+        timezone: "Asia/Kuala_Lumpur" as const,
+        currency: "MYR" as const,
+        revenue_cents: 0,
+        paid_bills: {
+          count: 0,
+          subtotal_cents: 0,
+          service_charge_cents: 0,
+          sst_cents: 0,
+          rounding_cents: 0,
+          total_cents: 0,
+        },
+        open_bills: { count: 0, subtotal_cents: 0, total_cents: 0 },
+        orders: { count: 0, cancelled_count: 0 },
+      },
+    }));
+    vi.doMock("../lib/data/supabase/history", () => ({ getStoreHistory }));
     const real = await import("../lib/data/d");
-    await expect(real.getStoreHistory("2026-11-11")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-      message: "未实现",
+    await expect(real.getStoreHistory("2026-11-11")).resolves.toMatchObject({
+      orders: [],
+      stats: {
+        date: "2026-11-11",
+        timezone: "Asia/Kuala_Lumpur",
+        currency: "MYR",
+      },
     });
+    expect(getStoreHistory).toHaveBeenCalledWith("2026-11-11");
     vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "mock");
     vi.resetModules();
   });

@@ -110,7 +110,6 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
       });
   }, [fetcher]);
   useEffect(() => {
-    const version = accessVersion;
     let active = true;
     const unsubscribe = onSessionChange((s) => {
       if (!active) return;
@@ -127,7 +126,6 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
     });
     return () => {
       active = false;
-      version.current++;
       unsubscribe();
     };
   }, [load]);

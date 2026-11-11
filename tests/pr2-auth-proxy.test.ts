@@ -80,16 +80,18 @@ it("mock bypasses all auth", async () => {
 });
 const contexts = [
   null,
-  { platform_role: "platform_admin", aal: "aal1" },
-  { platform_role: "platform_admin", aal: "aal2" },
-  { platform_role: "merchant", store: null },
+  { platform_role: "platform_admin", aal: "aal1", store: null },
+  { platform_role: "platform_admin", aal: "aal2", store: null },
+  { platform_role: "merchant", aal: "aal1", store: null },
   {
     platform_role: "merchant",
+    aal: "aal1",
     store: { id: "s", status: "active", is_profile_complete: false },
     password_set_at: null,
   },
   {
     platform_role: "merchant",
+    aal: "aal1",
     store: { id: "s", status: "active", is_profile_complete: true },
     password_set_at: "now",
   },

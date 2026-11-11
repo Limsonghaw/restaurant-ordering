@@ -44,9 +44,12 @@ export async function POST(request: Request, context: CustomerRouteContext) {
       new_bill_token_hash: sha256(token),
       captcha_verified: false,
     };
-    const probeDeviceRequiresCaptcha = await limit("orderProbeDevice", device_hash);
-    const probeIpRequiresCaptcha = await limit("orderProbeIp", ip_hash);
-    if (probeDeviceRequiresCaptcha || probeIpRequiresCaptcha) {
+    const probeDeviceLimiterUnavailable = await limit(
+      "orderProbeDevice",
+      device_hash,
+    );
+    const probeIpLimiterUnavailable = await limit("orderProbeIp", ip_hash);
+    if (probeDeviceLimiterUnavailable || probeIpLimiterUnavailable) {
       if (!body.captcha_token)
         throw new AppError("CAPTCHA_REQUIRED", { scope: "probe" });
       args.captcha_verified = await verifyTurnstile(body.captcha_token, {

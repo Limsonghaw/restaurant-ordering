@@ -24,6 +24,8 @@ function query(data: unknown, count = 0) {
     "lt",
     "order",
     "range",
+    "limit",
+    "or",
     "update",
     "maybeSingle",
   ])
@@ -40,6 +42,7 @@ beforeEach(() => {
     error: null,
   });
   fake.setAuth.mockResolvedValue(undefined);
+  fake.from.mockReturnValue(query([]));
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -50,8 +53,8 @@ it("queries active statuses with explicit columns and store scope; delta include
   await live.listLiveOrders();
   expect(q.in).toHaveBeenCalledWith("status", ["new", "accepted"]);
   expect(q.eq).toHaveBeenCalledWith("store_id", "s");
-  await live.fetchOrdersUpdatedSince("since");
-  expect(q.gt).toHaveBeenCalledWith("updated_at", "since");
+  await live.fetchOrdersUpdatedSince(new Date().toISOString());
+  expect(q.gt).toHaveBeenCalledWith("updated_at", expect.any(String));
   expect(q.select).toHaveBeenCalledWith(live.ORDER_COLUMNS);
   expect(live.ORDER_COLUMNS).not.toContain("*");
   expect(live.ORDER_COLUMNS).not.toContain("hash");
@@ -204,7 +207,14 @@ it("hydrates realtime order events instead of forwarding raw payload; suppresses
   const channel = { on: vi.fn(), subscribe: vi.fn() };
   channel.on.mockReturnValue(channel);
   fake.channel.mockReturnValue(channel);
-  const q = query([{ id: "o", device_seq_in_bill: 4, status: "new" }]);
+  const q = query([
+    {
+      id: "o",
+      device_seq_in_bill: 4,
+      status: "new",
+      updated_at: new Date().toISOString(),
+    },
+  ]);
   fake.from.mockReturnValue(q);
   const callbacks = {
     onInsert: vi.fn(),
@@ -220,6 +230,7 @@ it("hydrates realtime order events instead of forwarding raw payload; suppresses
       id: "o",
       device_seq_in_bill: 4,
       status: "new",
+      updated_at: expect.any(String),
     }),
   );
   expect(q.eq).toHaveBeenCalledWith("id", "o");
@@ -227,7 +238,9 @@ it("hydrates realtime order events instead of forwarding raw payload; suppresses
   await vi.waitFor(() => expect(callbacks.onUpdate).toHaveBeenCalled());
   expect(q.eq).toHaveBeenCalledWith("bill_id", "b");
   channel.on.mock.calls[1][2]({ eventType: "DELETE", new: {} });
-  await vi.waitFor(() => expect(q.gt).toHaveBeenCalledWith("updated_at", expect.any(String)));
+  await vi.waitFor(() =>
+    expect(q.gt).toHaveBeenCalledWith("updated_at", expect.any(String)),
+  );
   stop();
   callbacks.onUpdate.mockClear();
   channel.on.mock.calls[1][2]({ new: { id: "b" } });
@@ -258,18 +271,40 @@ it("bill refresh suppresses historical terminal orders but keeps today's termina
   channel.on.mockReturnValue(channel);
   fake.channel.mockReturnValue(channel);
   const rows = [
-    { id: "old", status: "served", created_at: "2000-01-01", updated_at: new Date().toISOString() },
-    { id: "today", status: "served", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-    { id: "active", status: "accepted", created_at: "2000-01-01", updated_at: new Date().toISOString() },
+    {
+      id: "old",
+      status: "served",
+      created_at: "2000-01-01",
+      updated_at: new Date().toISOString(),
+    },
+    {
+      id: "today",
+      status: "served",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    {
+      id: "active",
+      status: "accepted",
+      created_at: "2000-01-01",
+      updated_at: new Date().toISOString(),
+    },
   ];
   const q = query(rows);
   fake.from.mockReturnValue(q);
-  const callbacks = { onInsert: vi.fn(), onUpdate: vi.fn(), onConnectionChange: vi.fn() };
+  const callbacks = {
+    onInsert: vi.fn(),
+    onUpdate: vi.fn(),
+    onConnectionChange: vi.fn(),
+  };
   const stop = live.subscribeStoreOrders("s", callbacks);
   await vi.waitFor(() => expect(channel.subscribe).toHaveBeenCalled());
   channel.on.mock.calls[1][2]({ new: { id: "bill" } });
   await vi.waitFor(() => expect(callbacks.onUpdate).toHaveBeenCalledTimes(2));
-  expect(callbacks.onUpdate.mock.calls.map(([row]) => row.id)).toEqual(["today", "active"]);
+  expect(callbacks.onUpdate.mock.calls.map(([row]) => row.id)).toEqual([
+    "today",
+    "active",
+  ]);
   expect(q.eq).toHaveBeenCalledWith("bill_id", "bill");
   expect(q.eq).toHaveBeenCalledWith("store_id", "s");
   stop();
