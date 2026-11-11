@@ -358,3 +358,47 @@ export interface DiningTable {
 export type StoreProfilePatch = Partial<Pick<Store,
   "name" | "logo_path" | "address" | "opening_hours" | "is_accepting_orders" | "service_charge_bp" | "sst_bp"
 >>;
+
+// PR-D: M2/M3/M7/M11–M13, R2/R7/R8/R12, S1. Existing types remain unchanged.
+export type StorePageErrorCode =
+  MerchantErrorCode | "BILL_TOTAL_CHANGED" | "BILL_ALREADY_PAID";
+export interface StoreBillRow extends BillAmounts {
+  id: string;
+  table_id: string;
+  table_label: string;
+  status: "open" | "paid";
+  opened_at: string;
+  paid_at: string | null;
+  service_charge_bp: number;
+  sst_bp: number;
+}
+export interface StoreBillDetail extends StoreBillRow {
+  orders: LiveOrder[];
+}
+export interface BillPage {
+  bills: StoreBillRow[];
+  total: number;
+  page: number;
+  page_size: 20;
+}
+export interface TableQrLink {
+  table_id: string;
+  label: string;
+  url: string;
+}
+export interface DailyStats {
+  date: string;
+  timezone: "Asia/Kuala_Lumpur";
+  currency: "MYR";
+  revenue_cents: number;
+  paid_bills: BillAmounts & { count: number };
+  open_bills: { count: number; subtotal_cents: number; total_cents: number };
+  orders: { count: number; cancelled_count: number };
+}
+export interface StoreHistory {
+  orders: LiveOrder[];
+  stats: DailyStats;
+}
+export type StoreMockActionD = "empty" | "many_bills" | "restore";
+
+export interface StoreBillFilters { table_id?: string; paid_date?: string }

@@ -868,3 +868,26 @@ label:has(.upload-input):focus-within {
   outline: 2px solid var(--green);
   outline-offset: 4px;
 }
+
+/* PR-D store pages reuse the shared card, form and modal primitives. */
+.d-page { max-width: 1120px; margin: auto; }
+.d-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin: 20px 0; }
+.d-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.d-row input[type=checkbox] { width: 24px; min-height: 44px; }
+.d-order { margin: 16px 0; overflow-wrap: anywhere; }
+.d-settings { max-width: 680px; }
+.d-settings fieldset { border: 0; padding: 0; min-width: 0; display: grid; gap: 16px; }
+.d-settings label { display: grid; gap: 8px; }
+.logo .food-image { width: 46px; height: 46px; border-radius: 10px; font-size: 10px; }
+.d-qr { break-inside: avoid; overflow-wrap: anywhere; text-align: center; }
+.d-qr-placeholder { border: 2px dashed var(--muted, #777); padding: 30px; margin: 16px auto; max-width: 220px; }
+@media print {
+ @page { size: A4; margin: 12mm; }
+ body:has(.d-print) * { visibility: hidden; }
+ body:has(.d-print) .d-print, body:has(.d-print) .d-print * { visibility: visible; }
+ body:has(.d-print) dialog { position: absolute; inset: 0; width: 100%; max-width: none; max-height: none; overflow: visible; border: 0; }
+ .d-print { position: absolute; inset: 0; }
+ .d-print > p { display: none; }
+ .d-print-grid { display: grid; grid-template-columns: 1fr 1fr; }
+ .d-qr { height: 125mm; margin: 0; break-inside: avoid; }
+}

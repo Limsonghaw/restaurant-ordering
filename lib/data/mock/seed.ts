@@ -97,16 +97,14 @@ export function seed(): State {
     updated_at: now,
   }));
   const categories = stores.flatMap((store, index) =>
-    categoryNames
-      .slice(0, index === 1 ? 2 : 4)
-      .map((name, i) => ({
-        id: `cat-${i}`,
-        name,
-        sort_order: i * 10,
-        store_id: store.id,
-        hidden: false,
-        deleted: false,
-      })),
+    categoryNames.slice(0, index === 1 ? 2 : 4).map((name, i) => ({
+      id: index === 0 ? `cat-${i}` : `${store.id}-cat-${i}`,
+      name,
+      sort_order: i * 10,
+      store_id: store.id,
+      hidden: false,
+      deleted: false,
+    })),
   );
   const dayStart = Date.parse(
     `${new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)}T00:00:00+08:00`,
@@ -155,7 +153,7 @@ export function seed(): State {
     names.slice(0, s === 1 ? 4 : s > 1 ? 8 : 18).map((name, i) => ({
       id: `${store.id}-item-${i}`,
       store_id: store.id,
-      category_id: `cat-${s === 1 ? Math.floor(i / 2) : Math.min(3, Math.floor(i / 4))}`,
+      category_id: `${s === 0 ? "" : `${store.id}-`}cat-${s === 1 ? Math.floor(i / 2) : Math.min(3, Math.floor(i / 4))}`,
       name,
       description:
         i === 7

@@ -1,3 +1,4 @@
+import { settleFromControlD } from "./settlement-d";
 import type { MockAction, MockSettings, MockSnapshot } from "../types";
 import { seed } from "./seed";
 import { readState, saveState, stateKey } from "./state";
@@ -37,18 +38,20 @@ export async function runMockAction(action: MockAction, code: string) {
         (b) => b.table_id === table.id && b.status === "open",
       );
       if (action === "paid" && bill) {
-        bill.status = "paid";
+        settleFromControlD(state, bill);
         state.tokens
           .filter((t) => t.bill_id === bill.id)
           .forEach((t) => {
             t.reason = "bill_paid";
           });
       }
+      // 已失效令牌保留原原因；新桌码读取时不应把旧令牌误报为二维码更新。
+      // getTableBill 仅在旧码持有旧令牌访问时返回 qr_rotated。
       if (action === "rotate") {
         table.rotations++;
         table.code = `${table.original_code}-r${table.rotations}`;
         state.tokens
-          .filter((t) => t.table_id === table.id)
+          .filter((t) => t.table_id === table.id && !t.reason)
           .forEach((t) => {
             t.reason = "qr_rotated";
           });

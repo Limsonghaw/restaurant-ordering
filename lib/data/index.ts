@@ -21,3 +21,4 @@ export * from "./types";
 
 export * from "./c";
 export * from "./live";
+export * from "./d";
