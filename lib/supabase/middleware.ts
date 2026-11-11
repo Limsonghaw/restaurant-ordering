@@ -8,6 +8,7 @@ export function createClient(request: NextRequest) {
   if (!url || !key) throw new Error("请配置 Supabase 公开环境变量");
   const cookies = new NextResponse().cookies;
   const supabase = createServerClient(url, key, {
+    global: { fetch: (url, init) => fetch(url, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000) }) },
     cookieOptions: { sameSite: "lax", secure: process.env.NODE_ENV === "production" },
     cookies: {
       getAll: () => request.cookies.getAll(),
