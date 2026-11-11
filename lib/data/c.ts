@@ -28,6 +28,7 @@ export const {
   setItemHidden,
   deleteItem,
   uploadItemImage,
+  uploadLogo,
 } = process.env.NEXT_PUBLIC_DATA_SOURCE === "mock" ? mock_menu_c : real_menu_c;
 import * as mock_blocks_c from "./mock/blocks-c";
 import * as real_blocks_c from "./supabase/blocks-c";

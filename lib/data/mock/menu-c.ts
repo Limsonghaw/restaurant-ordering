@@ -305,3 +305,8 @@ export async function uploadItemImage(
     bitmap?.close();
   }
 }
+
+export async function uploadLogo(file: File): Promise<string> {
+  const { image_path } = await uploadItemImage(file, () => {});
+  return image_path;
+}

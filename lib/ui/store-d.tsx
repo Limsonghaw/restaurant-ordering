@@ -15,6 +15,7 @@ import {
   getStoreTableQrLinks,
   getStoreProfile,
   saveStoreProfile,
+  uploadLogo,
   getStoreHistory,
   getSession,
   onSessionChange,
@@ -59,6 +60,7 @@ import {
   OrderStatusLabel,
 } from "./common";
 import { useUnsavedChanges } from "./unsaved-c";
+import { uploadError } from "./error-messages";
 export function storePageMessage(error: unknown) {
   if (!(error instanceof DataError)) return "操作没有成功，请稍后再试";
   const text: Record<string, string> = {
@@ -773,6 +775,8 @@ export function SettingsPageD() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(),
     [notice, setNotice] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [logoError, setLogoError] = useState("");
   const storeId = useRef("");
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   const unsaved = useUnsavedChanges(dirty);
@@ -803,6 +807,20 @@ export function SettingsPageD() {
   function change(p: StoreProfilePatch) {
     setDraft({ ...draft, ...p });
     setNotice("");
+    setLogoError("");
+  }
+  async function uploadLogoFile(file?: File) {
+    if (!file || busy || uploading || r.suspended) return;
+    setUploading(true);
+    setLogoError("");
+    setError(undefined);
+    try {
+      change({ logo_path: await uploadLogo(file) });
+    } catch (e) {
+      setLogoError(uploadError(e));
+    } finally {
+      setUploading(false);
+    }
   }
   async function save() {
     if (busy || !draft || r.suspended) return;
@@ -888,7 +906,7 @@ export function SettingsPageD() {
             void save();
           }}
         >
-          <fieldset disabled={busy || r.suspended}>
+          <fieldset disabled={busy || uploading || r.suspended}>
             <TextField
               label="店名"
               maxLength={50}
@@ -899,15 +917,42 @@ export function SettingsPageD() {
             <div className="logo">
               <FoodImage key={draft.logo_path} path={draft.logo_path ?? null} />
             </div>
-            <TextField
-              label="店铺图片路径（假数据 /mock/，留空用占位图）"
-              maxLength={300}
-              value={draft.logo_path ?? ""}
-              onChange={(logo_path) => change({ logo_path: logo_path || null })}
-              error={
-                field === "logo_path" ? storePageMessage(error) : undefined
-              }
-            />
+            <label>
+              店铺图片
+              <span className="button secondary">
+                {draft.logo_path ? "更换图片" : "上传图片"}
+              </span>
+              <input
+                className="upload-input"
+                aria-label="店铺图片"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  void uploadLogoFile(file);
+                }}
+              />
+            </label>
+            <p>JPG、PNG 或 WebP，最大 2 MB</p>
+            {logoError && (
+              <p className="field-error" role="alert">
+                {logoError}
+              </p>
+            )}
+            {field === "logo_path" && (
+              <span role="alert">{storePageMessage(error)}</span>
+            )}
+            {draft.logo_path && (
+              <Button
+                variant="text"
+                type="button"
+                onClick={() => change({ logo_path: null })}
+              >
+                移除图片
+              </Button>
+            )}
             <TextField
               label="地址"
               maxLength={200}
