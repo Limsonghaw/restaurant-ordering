@@ -409,8 +409,58 @@ export interface PlaceOrderBody {
 }
 
 // New merchant errors remain append-only alongside the original ErrorCode union.
-export type DataErrorCode = ErrorCode | MerchantErrorCode | Pr4ErrorCode | CustomerErrorCode;
-export interface CheckoutResult { service_charge_bp: number; sst_bp: number; is_estimate: false }
+export type DataErrorCode =
+  ErrorCode | MerchantErrorCode | Pr4ErrorCode | CustomerErrorCode;
+export interface CheckoutResult {
+  service_charge_bp: number;
+  sst_bp: number;
+  is_estimate: false;
+}
 
 // PR4 customer API extension; original ErrorCode stays frozen.
 export type CustomerErrorCode = "PAYLOAD_TOO_LARGE";
+
+// PR-D: M2/M3/M7/M11–M13, R2/R7/R8/R12, S1. Existing types remain unchanged.
+export type StorePageErrorCode =
+  MerchantErrorCode | "BILL_TOTAL_CHANGED" | "BILL_ALREADY_PAID";
+export type StoreBillRow = Omit<
+  BillListRow,
+  "order_count" | "unserved_count" | "is_estimate"
+> & {
+  order_count?: number;
+  unserved_count?: number;
+  is_estimate?: boolean;
+};
+export interface StoreBillDetail extends StoreBillRow {
+  orders: LiveOrder[];
+}
+export interface StoreBillPage {
+  bills: StoreBillRow[];
+  total: number;
+  page: number;
+  page_size: 20;
+}
+export interface TableQrLink {
+  table_id: string;
+  label: string;
+  url: string;
+}
+export interface DailyStats {
+  date: string;
+  timezone: "Asia/Kuala_Lumpur";
+  currency: "MYR";
+  revenue_cents: number;
+  paid_bills: BillAmounts & { count: number };
+  open_bills: { count: number; subtotal_cents: number; total_cents: number };
+  orders: { count: number; cancelled_count: number };
+}
+export interface StoreHistory {
+  orders: LiveOrder[];
+  stats: DailyStats;
+}
+export type StoreMockActionD = "empty" | "many_bills" | "restore";
+
+export interface StoreBillFilters {
+  table_id?: string;
+  paid_date?: string;
+}

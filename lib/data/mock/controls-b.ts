@@ -1,3 +1,4 @@
+import { settleFromControlD } from "./settlement-d";
 import {
   DataError,
   type LiveMockAction,
@@ -96,7 +97,7 @@ export async function runLiveMockAction(action: LiveMockAction) {
     if (!order) return;
     const state = readState();
     const bill = state.bills.find((b) => b.id === order.bill_id)!;
-    if (action === "paid") bill.status = "paid";
+    if (action === "paid") settleFromControlD(state, bill);
     else bill.orders.find((o) => o.id === order.id)!.status = "accepted";
     saveState(state);
     const updated = allLiveOrders(storeId).find((o) => o.id === order.id)!;

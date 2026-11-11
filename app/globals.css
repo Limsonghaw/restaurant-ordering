@@ -868,3 +868,58 @@ label:has(.upload-input):focus-within {
   outline: 2px solid var(--green);
   outline-offset: 4px;
 }
+
+/* PR-D store pages reuse the shared card, form and modal primitives. */
+.d-page { max-width: 1120px; margin: auto; }
+.d-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin: 20px 0; }
+.d-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.d-row input[type=checkbox] { width: 24px; min-height: 44px; }
+.d-order { margin: 16px 0; overflow-wrap: anywhere; }
+.d-settings { max-width: 680px; }
+.d-settings fieldset { border: 0; padding: 0; min-width: 0; display: grid; gap: 16px; }
+.d-settings label { display: grid; gap: 8px; }
+.logo .food-image { width: 46px; height: 46px; border-radius: 10px; font-size: 10px; }
+.d-qr { break-inside: avoid; overflow-wrap: anywhere; text-align: center; }
+/* Print content is a direct body portal, outside the modal/top layer. */
+.d-print, .d-download-canvas { display: none; }
+.d-qr svg { width: min(100%, 256px); height: auto; }
+.d-settings { max-width: 640px; margin: 20px auto; }
+.d-strike, .d-cancelled .d-order-money { text-decoration: line-through; }
+.d-history-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 12px 0; }
+.d-table-head { display: none; }
+.d-tables > .card { margin: 12px 0; }
+@media (min-width: 768px) {
+ .d-bills { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; align-items: start; }
+ .d-bills > * { grid-column: 1; }
+ .d-bills > .d-bill-detail { grid-column: 2; grid-row: 2 / span 8; position: sticky; top: 16px; max-height: calc(100dvh - 32px); overflow-y: auto; }
+ .d-bills > .modal { grid-column: auto; }
+
+ .d-history-drawer .modal { inset: 0 0 0 auto; margin: 0; height: 100dvh; max-height: 100dvh; width: min(560px, 80vw); border-radius: 0; }
+}
+@media (max-width: 767px) {
+ .d-settings-save { position: sticky; bottom: calc(68px + env(safe-area-inset-bottom)); padding: 12px; background: var(--background, white); z-index: 2; }
+ .d-settings-save button { width: 100%; }
+}
+@media print {
+ @page { size: A4; margin: 12mm; }
+ body:has(> .d-print) > :not(.d-print) { display: none !important; }
+ body > .d-print { display: block !important; }
+ .d-print-sheet { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 125mm 125mm; }
+ .d-page-break { break-after: page; }
+ .d-print .d-qr { height: 125mm; margin: 0; padding: 8mm; break-inside: avoid; box-shadow: none; }
+ .d-print .d-qr svg { width: 65mm; height: 65mm; max-width: 100%; }
+ dialog { display: none !important; }
+}
+
+.d-responsive-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+.d-responsive-table th, .d-responsive-table td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border, #ddd); vertical-align: middle; }
+.d-responsive-table .actions { margin: 0; }
+@media (max-width: 767px) {
+ .d-responsive-table, .d-responsive-table tbody, .d-responsive-table tr, .d-responsive-table td { display: block; }
+ .d-responsive-table thead { display: none; }
+ .d-responsive-table tr { border: 1px solid var(--border, #ddd); border-radius: 12px; margin: 12px 0; padding: 12px; }
+ .d-responsive-table td { border: 0; padding: 4px 0; }
+}
+
+.d-bill-placeholder { display: none; }
+@media (min-width: 768px) { .d-bills > .d-bill-placeholder { display: block; grid-column: 2; grid-row: 2 / span 8; padding: 24px; color: var(--muted); } }
