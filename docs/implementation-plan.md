@@ -210,10 +210,16 @@ A 组顾客接口与数据库补充（不涉及 B 组 lib/data、lib/realtime）
 **开工条件**：PR2、PR3 已合并。
 
 **范围**（不含页面；P5 / P6 在前端 PR）
-- M9–M12、R1、R2：`lib/data/{orders,bills}.ts`；`lib/realtime/useStoreChannel.ts`（postgres_changes 订阅 orders、bills，filter `store_id=eq.{id}`；频道用 `channel('store:'+id, { config: { private: true } })`，Supabase Dashboard 的 Realtime 设置关闭「Allow public access」）。
+- M9–M12、R1、R2：`lib/data/live.ts` + `lib/data/supabase/live-orders.ts`；账单 `lib/data/bills.ts` + `lib/data/{mock,supabase}/bills.ts`；`lib/realtime/useStoreChannel.ts`（postgres_changes 订阅 orders、bills，filter `store_id=eq.{id}`；频道用 `channel('store:'+id, { config: { private: true } })`，Supabase Dashboard 的 Realtime 设置关闭「Allow public access」）。
 - 补拉：重连、visibilitychange、每 60 秒，`updated_since = 上次最大 updated_at − 30s`，按 id 去重合并。
 - 提示音：存在 `status='new'` 时每 10 秒响一次；首次需用户点击「开启声音」。
 - 给前端的约定：P5 进行中订单按设计文档 §21 Q5 的查询（served 订单用 `orders_store_served_idx`）；P6 账单列表分页 20/页；订单卡与账单详情显示「设备 #n」（orders.device_seq_in_bill，L-N3），不显示哈希。
+
+- PR2 统一入口：`lib/data/store.ts`、`lib/data/tables.ts`（经 `lib/data/index.ts` 导出）；完整资料用 getStore/updateStore，营业状态用 getStoreStatus/setAcceptingOrders，仅读 name/status/is_accepting_orders，开关只写 is_accepting_orders。
+- `listBills(BillFilters)` 页码从 1 开始，20/页，返回 BillPage；paid_from/paid_to 为 YYYY-MM-DD，末日包含，内部用 UTC+8 半开区间。getBillDetail 返回 BillDetail；markBillPaid 返回 CheckoutResult（冻结费率、金额、paid_at、table_id、tokens_revoked、is_estimate=false）。P6 重读 bill_overview 金额，不用 Realtime 裸行重算。
+- `useStoreChannel(storeId)` 返回 orders、connection、error、soundEnabled、enableSound、refresh；orders 包含补拉终态，P5 按状态筛选。P5 可保留 LiveProvider 或采用新 hook，同一用途不可同时启用，以免重复订阅和响铃。
+- 顾客 fetch 请求固定 same-origin/no-store；PlaceOrderBody 兼容 turnstile_token 别名（两者都有时别名优先），线上只发送 captcha_token。菜单 table.id 可供前端构造 cData。DataErrorCode 扩展账单冲突及 PAYLOAD_TOO_LARGE；保留 HTTP status、details.scope/reason/新金额、Retry-After 秒数和服务端文案。
+- build-guards 用受控 fetch 验证未配置数据源仍 isMock=false，并核对菜单路径和请求选项，替换已失效的 NOT_IMPLEMENTED 占位预期。
 
 **验收标准**（1–2、6 在前端 P5 / P6 合并后联调）
 1. 顾客下单后 2 秒内店家页面出现新订单并响铃；两台店家设备同时打开都能收到。

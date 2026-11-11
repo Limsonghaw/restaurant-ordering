@@ -556,19 +556,25 @@ Supabase Auth 设置（PR1b 修改 supabase/config.toml；生产项目只在 Das
 | M5/M6 | insert / update 列级授权内字段 | STORE_SUSPENDED；23514 → VALIDATION_FAILED |
 | M7 | dining_tables insert / update（label、is_active、sort_order）；重置二维码走 R12 rotate_table_qr | 23505 `dining_tables_store_label_uq` → TABLE_LABEL_TAKEN |
 | M8 | `storage.from('menu-images').upload(path, blob, { contentType: 'image/webp', upsert: false })` | FILE_TOO_LARGE、UNSUPPORTED_FILE_TYPE |
-| M9 | `from('orders').select('*, order_items(*), dining_tables(label)').in('status', ['new','accepted'])`；补拉 `.gt('updated_at', since)` | since = 上次最大 updated_at − 30 秒，按 id 去重 |
+| M9 | `from('orders').select('id,store_id,table_id,bill_id,seq_in_bill,device_seq_in_bill,status,subtotal_cents,item_count,created_at,accepted_at,served_at,cancelled_at,updated_at,cancel_reason,cancel_note,order_items(item_name,unit_price_cents,quantity,line_total_cents,note),dining_tables(label)').in('status', ['new','accepted'])`；补拉 `.gt('updated_at', since)` | 限定本店 store_id，按 created_at、id 排序；补拉包含终态。since = 上次最大 updated_at − 30 秒，按 id 去重 |
 | M10 | `channel('store:'+id, { config: { private: true } }).on('postgres_changes', { schema:'public', table:'orders', filter:'store_id=eq.'+id }, …)`，bills 同理 | 见 §11 |
-| M11 | `from('bill_overview').select('*', { count:'exact' })`，筛选 status、table_id、paid_at 区间；`.range(from, to)` 每页 20 | 日期区间用 `2026-11-04T00:00:00+08:00` 格式 |
-| M12 | bill_overview 单条 + orders + order_items |  |
+| M11 | `from('bill_overview').select('id,store_id,table_id,table_label,status,opened_at,paid_at,updated_at,subtotal_cents,service_charge_bp,service_charge_cents,sst_bp,sst_cents,rounding_cents,total_cents,is_estimate,order_count,unserved_count,currency', { count:'exact' })`，筛选 status、table_id、paid_at 区间；`.range(from, to)` 每页 20 | BillFilters.page 从 1 开始，20/页，返回 BillPage；paid_from/paid_to 为 YYYY-MM-DD，末日包含，转换为 UTC+8 半开区间；opened_at 倒序、id 稳定排序 |
+| M12 | bill_overview 单条使用 M11 显式列 + orders 使用 M9 显式列，限定本店与账单，按 seq_in_bill、id 排序 | getBillDetail → BillDetail {bill,orders}；金额和 is_estimate 直接取视图，设备序号用 device_seq_in_bill |
 | M13 | orders 按 created_at 的马来西亚日区间；P5「已上菜」按 served_at 查，见 §21 第 3 问 |  |
 | M14 | `rpc('list_blocked_clients', { p_include_expired: false })` → `[{ id, kind, reason, created_at, expires_at, is_active, source_order: { id, seq_in_bill, table_label, subtotal_cents, created_at } \| null }]`，最多 200 条，不含哈希；source_order 已带桌名和「第几单」，前端不用再查 orders（v0.6 第 10 问）；解除走 R13（不要直接 delete blocked_clients，0004 已收回 delete 权限） | FORBIDDEN（不是店铺成员）；停用的店也能看 |
+
+PR4 数据入口：订单 `lib/data/live.ts` / `supabase/live-orders.ts`；账单 `lib/data/bills.ts` / `{mock,supabase}/bills.ts`；完整店铺与桌号通过 `lib/data/store.ts`、`lib/data/tables.ts` 导出。M2 的实时营业状态入口只读 `name,status,is_accepting_orders`，setAcceptingOrders 只写 is_accepting_orders；完整资料仍用 getStore/updateStore。
+
+`useStoreChannel(storeId)` 返回 orders、connection、error、soundEnabled、enableSound、refresh；重连、页面恢复、每 60 秒补拉，保留终态并拒绝旧版本覆盖。enableSound 由用户点击触发，存在 new 单每 10 秒响铃。P5 在 LiveProvider 和新 hook 中择一，避免重复订阅/响铃。bills 事件只触发订单刷新，P6 金额需通过 listBills/getBillDetail 重读视图。
+
+顾客数据层线上字段为 `captcha_token`，PlaceOrderBody 兼容 `turnstile_token` 别名并转换（两者都有时别名优先）；菜单 `table.id` 提供 cData 所需 table_id。customer-fetch 保留服务端 code/message/details、status 和 Retry-After 秒数，包括 413 PAYLOAD_TOO_LARGE、CAPTCHA_REQUIRED.scope、410 reason 和「本店暂停服务」。类型 DataErrorCode 在原 ErrorCode 外扩展账单冲突与 PAYLOAD_TOO_LARGE，原错误码联合保持冻结。
 
 ### R1–R14 RPC
 
 | RPC | 参数 | 返回 | 错误 |
 | --- | --- | --- | --- |
-| update_order_status | p_order_id, p_to, p_expected, p_cancel_reason?, p_cancel_note? | 订单行 | NOT_FOUND、STORE_SUSPENDED、ORDER_STATUS_CONFLICT（details.current_status）、INVALID_STATUS_TRANSITION、ORDER_BILL_CLOSED、VALIDATION_FAILED |
-| mark_bill_paid | p_bill_id, p_expected_total_cents（店家确认时看到的合计） | 冻结后的账单金额 + tokens_revoked（结账即清台：撤销该账单全部顾客令牌） | BILL_TOTAL_CHANGED（details 为最新金额）、BILL_ALREADY_PAID、NOT_FOUND、STORE_SUSPENDED、VALIDATION_FAILED |
+| update_order_status | p_order_id, p_to, p_expected, p_cancel_reason?, p_cancel_note? | RPC 返回订单行；数据层随后按本店重查 M9 完整关联订单；取消原因四选一必填、说明最多 100 个 Unicode 码点 | NOT_FOUND、STORE_SUSPENDED、ORDER_STATUS_CONFLICT（details.current_status）、INVALID_STATUS_TRANSITION、ORDER_BILL_CLOSED、VALIDATION_FAILED |
+| mark_bill_paid | p_bill_id, p_expected_total_cents（店家确认时看到的合计） | CheckoutResult：冻结金额、service_charge_bp/sst_bp、is_estimate=false、paid_at、table_id、tokens_revoked（结账即清台：撤销该账单全部顾客令牌） | BILL_TOTAL_CHANGED（details 为最新金额）、BILL_ALREADY_PAID、NOT_FOUND、STORE_SUSPENDED、VALIDATION_FAILED |
 | reorder_categories | p_ids uuid[]（≤50） | void | VALIDATION_FAILED、NOT_FOUND、STORE_SUSPENDED |
 | reorder_items | p_category_id, p_ids uuid[]（≤500） | void | 同上 |
 | soft_delete_item | p_item_id | void | NOT_FOUND、STORE_SUSPENDED |

@@ -409,5 +409,8 @@ export interface PlaceOrderBody {
 }
 
 // New merchant errors remain append-only alongside the original ErrorCode union.
-export type DataErrorCode = ErrorCode | MerchantErrorCode | Pr4ErrorCode;
+export type DataErrorCode = ErrorCode | MerchantErrorCode | Pr4ErrorCode | CustomerErrorCode;
 export interface CheckoutResult { service_charge_bp: number; sst_bp: number; is_estimate: false }
+
+// PR4 customer API extension; original ErrorCode stays frozen.
+export type CustomerErrorCode = "PAYLOAD_TOO_LARGE";
