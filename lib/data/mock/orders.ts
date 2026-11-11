@@ -213,7 +213,10 @@ export async function getTableBill(code: string): Promise<TableBill> {
   const token =
     original &&
     state.tokens.find(
-      (t) => t.table_id === original.id && t.device_id === state.device_id,
+      (t) =>
+        t.table_id === original.id &&
+        t.device_id === state.device_id &&
+        !(t.reason === "qr_rotated" && code === original.code),
     );
   if (token && (token.reason || token.expires_at <= Date.now())) {
     const reason = token.reason ?? "expired";

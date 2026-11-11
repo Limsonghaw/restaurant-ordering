@@ -7,6 +7,7 @@ import {
 import { type State } from "./seed";
 import { calculateAmounts } from "./money";
 import { delay, readState, tableFor } from "./state";
+// 相同 sort_order 按 id 升序，保证稳定排序。
 // C1
 export async function getTableMenu(code: string): Promise<TableMenu> {
   await delay();
@@ -38,7 +39,7 @@ export async function getTableMenu(code: string): Promise<TableMenu> {
     table: { id: table.id, label: table.label },
     categories: state.categories
       .filter((c) => c.store_id === store.id && !c.hidden && !c.deleted)
-      .sort((a, b) => a.sort_order - b.sort_order)
+      .sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id))
       .map(({ id, name, sort_order }) => ({ id, name, sort_order })),
     items: state.items
       .filter(
@@ -54,7 +55,7 @@ export async function getTableMenu(code: string): Promise<TableMenu> {
               !c.deleted,
           ),
       )
-      .sort((a, b) => a.sort_order - b.sort_order)
+      .sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id))
       .map(
         ({
           id,

@@ -32,7 +32,9 @@ jobs:
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync } from 'node:fs';
           import { join } from 'node:path';
-          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok|ro-mock:live-b|mock-live-device|ro-mock:auth-c-v1|ro-mock:upload-probe|切换模拟身份|@demo\.test/;
+          // 所有 ro-mock: 前缀的存储键都算 mock 标记；只放过两个生产代码也会监听的窗口事件名 ro-mock:change / ro-mock:live（后面紧跟引号）。
+          // 每个新 mock 模块都要带一个能被这里匹配的标记（存储键用 ro-mock: 前缀，或把面板独有文字加进来）。
+          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:(?!(?:change|live)["'`])|mock-captcha-ok|mock-live-device|切换模拟身份|账单 \/ 订单记录（PR-D）|@demo\.test/;
           function check(directory) {
             let count = 0;
             for (const entry of readdirSync(directory, { withFileTypes: true })) {

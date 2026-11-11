@@ -1,4 +1,5 @@
 "use client";
+import { MockPanelD } from "./mock-panel-d";
 import { MockPanelC } from "./mock-panel-c";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -122,6 +123,7 @@ export function MockPanel() {
               ))}
               <MockPanelC />
               <MockPanelB />
+              <MockPanelD />
               <h3>演示入口</h3>
               <div className="demo-links">
                 {snapshot.demo_codes.map((c) => (

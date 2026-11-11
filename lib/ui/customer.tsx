@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -15,16 +14,9 @@ import {
   type MenuItem,
   type TableMenu,
   type TableBill,
-  type BillGoneReason,
 } from "../data";
 import { addCartLine, readCart, writeCart } from "../cart";
-import {
-  errorMessage,
-  formatMoney,
-  formatTime,
-  goneMessages,
-  cancelLabels,
-} from "../format";
+import { errorMessage, formatMoney, formatTime, cancelLabels } from "../format";
 import { routes } from "../routes";
 import {
   useCountdown,
@@ -44,6 +36,7 @@ import {
   TextField,
   Toast,
 } from "./common";
+import { billGoneState } from "./customer-errors-d";
 import { Captcha } from "./captcha";
 export function logoUrl(path: string | null) {
   return path && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)
@@ -65,14 +58,9 @@ function Header({
         {cart ? (
           <Link href={routes.menu(code)}>← 返回菜单</Link>
         ) : (
-          <Image
-            width={46}
-            height={46}
-            unoptimized
-            className="logo"
-            src={logoUrl(menu.store.logo_path)}
-            alt=""
-          />
+          <div className="logo">
+            <FoodImage key={menu.store.logo_path} path={menu.store.logo_path} />
+          </div>
         )}
         <div className="brand">
           <h1>{cart ? "购物车" : menu.store.name}</h1>
@@ -943,7 +931,7 @@ export function OrdersPage({ code }: { code: string }) {
   const [value, setValue] = useState<TableBill>();
   const [error, setError] = useState<unknown>();
   const [warning, setWarning] = useState(false);
-  const [gone, setGone] = useState<BillGoneReason>();
+  const [gone, setGone] = useState<ReturnType<typeof billGoneState>>();
   const [toast, setToast] = useState("");
   const [revision, setRevision] = useState(0);
   const seconds = useCountdown(error);
@@ -975,9 +963,10 @@ export function OrdersPage({ code }: { code: string }) {
           timer = setTimeout(() => void refresh(), next.poll_after_ms);
       } catch (e) {
         if (disposed) return;
-        if (e instanceof DataError && e.status === 410) {
-          stopped = true;
-          setGone(e.details.reason as BillGoneReason);
+        const terminal = billGoneState(e);
+        if (terminal) {
+          stopped = terminal.stopPolling;
+          setGone(terminal);
         } else if (e instanceof DataError && e.code === "BILL_TOKEN_INVALID") {
           setValue({
             view: "table",
@@ -1029,14 +1018,14 @@ export function OrdersPage({ code }: { code: string }) {
     return (
       <FullPageMessage
         action={
-          gone === "qr_rotated" ? undefined : (
+          gone.reason === "qr_rotated" ? undefined : (
             <Link className="button primary" href={routes.menu(code)}>
-              {gone === "bill_paid" ? "重新扫码再点一单" : "回到菜单"}
+              {gone.reason === "bill_paid" ? "重新扫码再点一单" : "回到菜单"}
             </Link>
           )
         }
       >
-        {goneMessages[gone]}
+        {gone.message}
       </FullPageMessage>
     );
   if (
