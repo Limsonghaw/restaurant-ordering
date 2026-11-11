@@ -61,3 +61,13 @@ npm run format
 验证码 site key 留空时不加载外部脚本，使用勾选占位。设置公开 site key 后才按需加载官方 Turnstile；三种公开测试 key 见 `.env.example`，`VERCEL_ENV=production` 禁止测试 key。每次提交后都重置验证码；真实校验归后端负责。
 
 公共组件位于 `lib/ui/common.tsx`，验证码位于 `lib/ui/captcha.tsx`，后台框架 `StoreShell` 支持 `banners` 叠放和 `newOrderCount` 角标。后续模拟项按 `lib/ui/mock-panel-a.ts`、`lib/data/mock/controls-a.ts` 的领域文件方式追加。金额和时间统一使用 `lib/format.ts`；金额只在 mock 内部计价，页面展示数据层返回值。
+
+## PR-C 认证、菜单管理和拉黑演示
+
+登录入口 `/login`；`/register` 不收密码或店名，邮箱验证通过「假数据 → 模拟邮箱」手动打开链接再确认；手机号验证码为 `123456`，号码仅通过 sessionStorage 传给 `/verify`，不进入网址。邮件链接 15 分钟一次有效，短信 10 分钟、错 5 次失效；验证后 5 分钟内设置密码。密码和验证码不存明文，假账号只保存 SHA-256 密码摘要；这只是浏览器演示，不能作为真实认证安全边界。
+
+仅假数据用：`owner@demo.test`（或 `012-000 0001`）、`new@demo.test`（空菜单、资料未填）、`disabled@demo.test`（只读）、`admin@demo.test`、`nostore@demo.test` 的演示密码均为 `demo-pass-123`；`nopw@demo.test` 没有密码，请用验证码流程；`unverified@demo.test` 未验证。身份组可直接切换以上状态及管理员 aal1；认证出错组设置一次性错误；模拟邮箱可标记链接过期或已用。未验证账号 24 小时后清理，也可用面板立即模拟清理。
+
+菜单管理 `/store/menu` 和顾客菜单 `/t/demo-a1` 共用数据；分类、菜品隐藏、排序、上传和删除会同步到顾客菜单，已下单的历史快照不变。图片仅在浏览器转为 WebP 并存本机；空间不足时提示保存或上传失败。`libphonenumber-js/max` 用于有效手机号码和国家白名单验证；排序使用原生拖放和上移/下移，无新增拖放依赖。
+
+`/store/blocked` 只能查看和解除拉黑；「假数据 → 拉黑」可拉黑当前模拟手机或使记录全部过期，以测试 P2。PR-B 尚未合并，P5「拒单并拉黑」按钮留给后续小 PR，R9 假数据函数已提供。Supabase 分支仍全部为「未实现」占位；proxy 在 mock 放行、由客户端使用同一守卫判定表，在 supabase 因后端 PR2 尚未交付而返回中文 503 占位。未初始化任何真实认证、邮件或短信服务。

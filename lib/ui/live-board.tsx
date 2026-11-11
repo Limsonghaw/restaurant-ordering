@@ -14,6 +14,7 @@ import {
   TextField,
 } from "./common";
 import { useReception } from "./live-provider";
+import { LiveOrderDetail } from "./live-order-detail-c";
 const columns = ["new", "accepted", "served"] as const;
 export function LiveBoard() {
   const live = useReception();
@@ -142,6 +143,7 @@ export function LiveBoard() {
                     className={`card live-order ${status === "new" ? "live-new" : ""}`}
                     key={order.id}
                   >
+                    <LiveOrderDetail order={order} />
                     <div className="order-title">
                       <h3>{order.dining_tables.label}</h3>
                       <OrderStatusLabel status={order.status} />

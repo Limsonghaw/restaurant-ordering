@@ -164,7 +164,11 @@ export function MenuPage({ code }: { code: string }) {
       void load();
     };
     window.addEventListener("ro-mock:change", listener);
-    return () => window.removeEventListener("ro-mock:change", listener);
+    window.addEventListener("storage", listener);
+    return () => {
+      window.removeEventListener("ro-mock:change", listener);
+      window.removeEventListener("storage", listener);
+    };
   }, [load]);
   useEffect(() => {
     if (!toast) return;
@@ -522,7 +526,11 @@ export function CartPage({ code }: { code: string }) {
   useEffect(() => {
     loadMenu();
     window.addEventListener("ro-mock:change", loadMenu);
-    return () => window.removeEventListener("ro-mock:change", loadMenu);
+    window.addEventListener("storage", loadMenu);
+    return () => {
+      window.removeEventListener("ro-mock:change", loadMenu);
+      window.removeEventListener("storage", loadMenu);
+    };
   }, [loadMenu]);
   useEffect(() => {
     if (lastCart.current !== cart) {

@@ -70,6 +70,7 @@ const api = vi.hoisted(() => ({
   fetchOrdersUpdatedSince: vi.fn(),
   subscribeStoreOrders: vi.fn(),
   updateOrderStatus: vi.fn(),
+  blockClientFromOrder: vi.fn(),
   setAcceptingOrders: vi.fn(),
 }));
 vi.mock("../lib/data", async () => ({
@@ -349,4 +350,56 @@ it("also resets when reload observes a new session before the session event arri
   expect(render().orders).toEqual([]);
   expect(unsubscribe).toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("rejects and blocks through the guarded provider and removes the live card", async () => {
+  api.blockClientFromOrder.mockResolvedValue({
+    blocked: true,
+    cancelled: true,
+  });
+  expect(await render().block(order)).toBe(true);
+  expect(
+    render().orders.find((value: LiveOrder) => value.id === order.id)?.status,
+  ).toBe("cancelled");
+  expect(nodes("toast")[0].props.children).toContain("已拒单并拉黑这台手机");
+});
+it("blocks stale reject-and-block entry points after suspension or logout", async () => {
+  const stale = render();
+  sessionChanged({
+    ...session,
+    store: { ...session.store!, status: "suspended" },
+  });
+  expect(await stale.block(order)).toBe(false);
+  sessionChanged(null);
+  expect(await stale.block(order)).toBe(false);
+  expect(api.blockClientFromOrder).not.toHaveBeenCalled();
+});
+it("ignores reject-and-block responses after switching sessions", async () => {
+  let resolve!: () => void;
+  api.blockClientFromOrder.mockImplementation(
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  );
+  const pending = render().block(order);
+  sessionChanged(null);
+  resolve();
+  expect(await pending).toBe(false);
+  expect(render().orders).toEqual([]);
+  expect(nodes("toast")).toHaveLength(0);
+});
+it("refreshes processed orders and never displays backend messages on block failure", async () => {
+  api.blockClientFromOrder.mockRejectedValueOnce(
+    new DataError("NOT_FOUND", "private data"),
+  );
+  expect(await render().block(order)).toBe(false);
+  expect(api.listLiveOrders.mock.calls.length).toBeGreaterThan(1);
+  render();
+  expect(nodes("toast")[0].props.children).toContain("这张订单已被处理");
+  await flush();
+  api.blockClientFromOrder.mockRejectedValueOnce(new Error("private data"));
+  expect(await render().block(order)).toBe(false);
+  render();
+  expect(nodes("toast")[0].props.children).toContain("操作没有成功，请重试");
 });

@@ -1,3 +1,4 @@
+import { extendSeedC } from "./seed-c";
 import type {
   MenuItem,
   Category,
@@ -227,7 +228,7 @@ export function seed(): State {
       orders: [makeOrder(0, "store-1")],
     },
   ];
-  return {
+  return extendSeedC({
     stores,
     categories,
     tables,
@@ -252,5 +253,5 @@ export function seed(): State {
       captcha_fail: false,
       auto_progress: false,
     },
-  };
+  });
 }

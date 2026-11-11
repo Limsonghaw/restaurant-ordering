@@ -1,4 +1,5 @@
 "use client";
+import { MockPanelC } from "./mock-panel-c";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -119,6 +120,7 @@ export function MockPanel() {
                   {label}
                 </Button>
               ))}
+              <MockPanelC />
               <MockPanelB />
               <h3>演示入口</h3>
               <div className="demo-links">

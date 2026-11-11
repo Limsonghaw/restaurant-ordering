@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   DataError,
+  blockClientFromOrder,
   fetchOrdersUpdatedSince,
   getLiveMockSettings,
   configureLiveMock,
@@ -50,6 +51,7 @@ interface Reception {
   reload: () => void;
   testSound: () => void;
   toggleAccepting: () => void;
+  block: (order: LiveOrder) => Promise<boolean>;
   change: (order: LiveOrder, change: OrderStatusChange) => Promise<boolean>;
 }
 const Context = createContext<Reception | null>(null);
@@ -494,6 +496,46 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+  async function block(order: LiveOrder): Promise<boolean> {
+    if (!canWrite() || busyRef.current.has(order.id)) return false;
+    const currentGeneration = generation.current;
+    busyRef.current.add(order.id);
+    setBusy([...busyRef.current]);
+    try {
+      await blockClientFromOrder(order.id);
+      if (currentGeneration !== generation.current) return false;
+      ingest([
+        { ...order, status: "cancelled", updated_at: new Date().toISOString() },
+      ]);
+      setToast("已拒单并拉黑这台手机");
+      return true;
+    } catch (e) {
+      if (currentGeneration !== generation.current) return false;
+      if (
+        e instanceof DataError &&
+        [
+          "NOT_FOUND",
+          "VALIDATION_FAILED",
+          "ORDER_STATUS_CONFLICT",
+          "INVALID_STATUS_TRANSITION",
+          "ORDER_BILL_CLOSED",
+        ].includes(e.code)
+      ) {
+        setToast("这张订单已被处理");
+        reconnectRef.current();
+        reloadRef.current();
+      } else {
+        report(e);
+        setToast("操作没有成功，请重试");
+      }
+      return false;
+    } finally {
+      if (currentGeneration === generation.current) {
+        busyRef.current.delete(order.id);
+        setBusy([...busyRef.current]);
+      }
+    }
+  }
   async function change(
     order: LiveOrder,
     value: OrderStatusChange,
@@ -676,6 +718,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           else void accepting(true);
         },
         change,
+        block,
       }}
     >
       <StoreShell

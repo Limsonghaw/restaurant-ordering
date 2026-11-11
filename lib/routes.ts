@@ -11,6 +11,12 @@ export const routes = {
   resetPassword: "/reset-password",
   store: "/store",
   admin: "/admin",
+  storeLive: "/store/live",
+  storeMenu: "/store/menu",
+  storeBlocked: "/store/blocked",
+  storeSettings: "/store/settings",
+  adminStores: "/admin/stores",
+  adminMfa: "/admin/mfa",
 };
 export const storeNavigation = [
   ["接单画面", "/store/live"],
