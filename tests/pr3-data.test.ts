@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fake = vi.hoisted(() => ({
   query: vi.fn(),
+  begin: vi.fn(),
   json: vi.fn((v: unknown) => v),
   factory: vi.fn(),
   rpc: vi.fn(),
@@ -15,6 +16,7 @@ import {
   customerGetMenu,
   customerQuote,
   customerPlaceOrder,
+  customerReplayOrder,
   customerGetBill,
   mapCustomerError,
 } from "../lib/supabase/customer";
@@ -33,8 +35,13 @@ beforeEach(() => {
   );
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://site.example.invalid");
   vi.stubEnv("QR_SIGNING_SECRET", "unit-test");
-  fake.factory.mockReturnValue(Object.assign(fake.query, { json: fake.json }));
+  fake.factory.mockReturnValue(
+    Object.assign(fake.query, { json: fake.json, begin: fake.begin }),
+  );
   fake.query.mockResolvedValue([{ result: { ok: true } }]);
+  fake.begin.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+    fn(fake.query),
+  );
   fake.rpc.mockResolvedValue({
     data: { store: { id: table.store_id } },
     error: null,
@@ -55,7 +62,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
-it("only four parameterized RPCs and fixed pool/session timeout options", async () => {
+it("only four parameterized RPCs and fixed pool options without Supavisor startup options", async () => {
   expect(await customerGetMenu(table)).toEqual({ ok: true });
   expect(fake.factory).toHaveBeenCalledWith(
     expect.stringContaining("database.invalid"),
@@ -65,7 +72,6 @@ it("only four parameterized RPCs and fixed pool/session timeout options", async 
       ssl: "require",
       idle_timeout: 20,
       connect_timeout: 5,
-      connection: { options: "-c statement_timeout=3000" },
     },
   );
   await customerQuote(table, []);
@@ -182,4 +188,73 @@ it("Redis REST uses atomic sliding window and fails on missing config/errors", a
   expect(command[3]).toBe("customer:key");
   fetch.mockResolvedValue(Response.json({ error: "offline" }));
   await expect(redis.hit("key", 60000)).rejects.toThrow();
+});
+
+const replayArgs = {
+  ...table,
+  items: [],
+  request_id: table.table_id,
+  request_hash: "a".repeat(64),
+  device_hash: "b".repeat(64),
+  ip_hash: "c".repeat(64),
+  bill_token_hash: null,
+  new_bill_token_hash: "d".repeat(64),
+  captcha_verified: true,
+};
+it("replay probe commits only a database-confirmed replay and preserves token recovery", async () => {
+  const result = { replayed: true, bill_token_issued: true };
+  fake.query.mockResolvedValue([{ result }]);
+  expect(await customerReplayOrder(replayArgs)).toEqual(result);
+  expect(fake.begin).toHaveBeenCalledOnce();
+  expect(fake.query).toHaveBeenCalledOnce();
+  expect(fake.query.mock.calls[0].at(-1)).toBe(false);
+});
+it("unknown IDs throw inside the transaction, forcing rollback before normal limits", async () => {
+  fake.query.mockResolvedValue([
+    { result: { replayed: false, bill_token_issued: true } },
+  ]);
+  let rollback = false;
+  fake.begin.mockImplementation(
+    async (fn: (tx: unknown) => Promise<unknown>) => {
+      try {
+        return await fn(fake.query);
+      } catch (e) {
+        rollback = true;
+        throw e;
+      }
+    },
+  );
+  expect(await customerReplayOrder(replayArgs)).toBeNull();
+  expect(rollback).toBe(true);
+  expect(fake.query).toHaveBeenCalledOnce();
+});
+it.each(["CAPTCHA_REQUIRED", "RATE_LIMITED", "IDEMPOTENCY_KEY_REUSED"])(
+  "probe business failure %s cannot authorize a replay",
+  async (message) => {
+    fake.query.mockRejectedValue({ code: "P0001", message });
+    expect(await customerReplayOrder(replayArgs)).toBeNull();
+  },
+);
+it("probe infrastructure failures fail closed", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  fake.query.mockRejectedValue({ code: "57014" });
+  await expect(customerReplayOrder(replayArgs)).rejects.toMatchObject({
+    code: "INTERNAL",
+  });
+  log.mockRestore();
+});
+it("database retry seconds survive allowlisting but arbitrary details do not", () => {
+  const error = mapCustomerError({
+    code: "P0001",
+    message: "RATE_LIMITED",
+    detail: JSON.stringify({
+      scope: "table_db",
+      retry_after_seconds: 120.1,
+      secret: "private",
+    }),
+  });
+  expect(error.details).toEqual({
+    scope: "table_db",
+    retry_after_seconds: 121,
+  });
 });

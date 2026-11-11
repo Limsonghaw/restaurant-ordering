@@ -1,11 +1,35 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { secret } from "./hash";
+// Production supports Vercel only: it overwrites x-vercel-forwarded-for.
+// Never trust client-supplied x-real-ip outside local development/tests.
 export function trustedIp(request: Request): string {
   const ip =
     request.headers.get("x-vercel-forwarded-for") ??
-    request.headers.get("x-real-ip");
-  return ip && isIP(ip.trim()) ? ip.trim() : "unknown";
+    (["development", "test"].includes(process.env.NODE_ENV ?? "")
+      ? request.headers.get("x-real-ip")
+      : null);
+  if (!ip || ip.includes("%") || !isIP(ip.trim())) return "unknown";
+  const value = ip.trim();
+  if (isIP(value) === 4) return value;
+  // URL canonicalizes compressed IPv6 and dotted IPv4 suffixes without DNS.
+  const canonical = new URL(`http://[${value}]/`).hostname.slice(1, -1);
+  const halves = canonical.split("::");
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves[1] ? halves[1].split(":") : [];
+  const words =
+    halves.length === 2
+      ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+      : left;
+  const n = words.map((w) => parseInt(w, 16));
+  if (n.slice(0, 5).every((w) => w === 0) && n[5] === 65535)
+    return [n[6] >> 8, n[6] & 255, n[7] >> 8, n[7] & 255].join(".");
+  return (
+    n
+      .slice(0, 4)
+      .map((w) => w.toString(16))
+      .join(":") + "::/64"
+  );
 }
 export function cookie(request: Request, name: string): string | null {
   return (

@@ -75,9 +75,14 @@ export async function limit(
     count = await limiter.hit(`${scope}:${key}`, window);
   } catch {
     if (scope.startsWith("order")) return true;
-    throw new AppError("RATE_LIMITED");
+    throw new AppError("RATE_LIMITED", {
+      retry_after_seconds: Math.ceil(window / 1000),
+    });
   }
   if (scope === "orderStore" || scope === "orderTable") return count > maximum;
-  if (count > maximum) throw new AppError("RATE_LIMITED");
+  if (count > maximum)
+    throw new AppError("RATE_LIMITED", {
+      retry_after_seconds: Math.ceil(window / 1000),
+    });
   return scope === "orderIp" && count > 20;
 }
