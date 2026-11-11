@@ -63,5 +63,7 @@ try {
   equal((await q('select customer_check_replay($1,$2,1,$3,$4,$5) result',[store,t.id,firstRequest,'f'.repeat(64),D2]))[0].result,{status:'mismatch',code:'IDEMPOTENCY_KEY_REUSED'});
   await db.exec('reset role; commit');
   equal((await q("select conname from pg_constraint where conrelid='public.orders'::regclass and conname='orders_store_id_request_id_key'" )).length,1);
+  const [{source}] = await q("select prosrc as source from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure");
+  equal(/for\s+(update|share)|advisory|\b(insert|update|delete|merge)\s/i.test(source),false);
   console.log(`PASS customer_check_replay: ${assertions} assertions`);
 } finally { await db.close(); }

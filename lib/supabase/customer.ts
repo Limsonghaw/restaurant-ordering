@@ -1,3 +1,4 @@
+import { isNonLocalEnv } from "../env";
 import postgres from "postgres";
 import { AppError, ERRORS, type AppCode } from "../api/errors";
 import type { TableCode } from "../qr";
@@ -10,9 +11,8 @@ import type {
 } from "../data/types";
 let sql: ReturnType<typeof postgres> | undefined;
 export function customerDatabaseSsl(url: string): "require" | false {
-  const local = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(new URL(url).hostname);
-  return process.env.CUSTOMER_DB_SSL === "disable" && local &&
-    process.env.NODE_ENV !== "production" && process.env.VERCEL_ENV !== "production"
+  const local = ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
+  return process.env.CUSTOMER_DB_SSL === "disable" && local && !isNonLocalEnv()
     ? false : "require";
 }
 function database() {

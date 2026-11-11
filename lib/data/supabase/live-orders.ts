@@ -138,7 +138,8 @@ export function subscribeStoreOrders(
     cleanup = () => {
       void client.removeChannel(channel);
     };
-    const refresh = async (orderId?: string, insert = false) => {
+    let watermark = Date.now();
+    const refresh = async (orderId?: string, insert = false, billId?: string) => {
       if (stopped) return;
       try {
         let query = client
@@ -146,10 +147,18 @@ export function subscribeStoreOrders(
           .select(ORDER_COLUMNS)
           .eq("store_id", store_id);
         if (orderId) query = query.eq("id", orderId);
+        else if (billId) query = query.eq("bill_id", billId);
+        else query = query.gt("updated_at", new Date(watermark - 30000).toISOString());
         const rows = await result<LiveOrder[]>(query.returns<LiveOrder[]>());
         if (!stopped)
-          for (const row of rows)
-            (insert ? callbacks.onInsert : callbacks.onUpdate)(row);
+          for (const row of rows) {
+            const time = Date.parse(row.updated_at);
+            if (Number.isFinite(time)) watermark = Math.max(watermark, time);
+            const { start, end } = malaysiaDay();
+            const created = Date.parse(row.created_at);
+            if (["new", "accepted"].includes(row.status) || (created >= start && created < end))
+              (insert ? callbacks.onInsert : callbacks.onUpdate)(row);
+          }
       } catch {
         if (!stopped) callbacks.onConnectionChange("disconnected");
       }
@@ -180,8 +189,9 @@ export function subscribeStoreOrders(
           table: "bills",
           filter: "store_id=eq." + store_id,
         },
-        () => {
-          void refresh();
+        (payload) => {
+          void refresh(undefined, false,
+            payload.new && "id" in payload.new ? String(payload.new.id) : undefined);
         },
       )
       .subscribe((status) => {

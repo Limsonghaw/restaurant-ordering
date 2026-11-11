@@ -256,13 +256,37 @@ it("Turnstile missing secret/token/network error fails closed", async () => {
     code: "CAPTCHA_FAILED",
   });
 });
-it("Redis unavailable requires captcha for orders, rejects other scopes", async () => {
+it("Redis unavailable requires captcha before any database call", async () => {
   vi.mocked(rateLimiter.hit).mockRejectedValue(new Error("offline"));
-  expect(await err(await order(req(body()), context()))).toBe(
-    "CAPTCHA_REQUIRED",
-  );
-  expect((await order(req(body("test-token")), context())).status).toBe(201);
+  const response = await order(req(body()), context());
+  expect((await response.json()).error).toMatchObject({
+    code: "CAPTCHA_REQUIRED", details: { scope: "probe" },
+  });
+  for (const fn of Object.values(rpc)) expect(fn).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
   expect((await menu(req(), context())).status).toBe(429);
+});
+it("Redis unavailable accepts a bound valid captcha and verifies it only once", async () => {
+  vi.mocked(rateLimiter.hit).mockRejectedValue(new Error("offline"));
+  vi.stubEnv("TURNSTILE_SECRET_KEY", "production-test-secret");
+  vi.mocked(fetch).mockResolvedValue(Response.json({
+    success: true, action: "place_order", hostname: "site.example.invalid",
+    cdata: `${table_id}_${table_id}`,
+  }));
+  expect((await order(req(body("test-token")), context())).status).toBe(201);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const verification = vi.mocked(fetch).mock.calls[0][1]?.body as URLSearchParams;
+  expect(verification.get("idempotency_key")).toBe(table_id);
+  expect(rpc.customerCheckReplay).toHaveBeenCalledTimes(1);
+  expect(rpc.customerPlaceOrder).toHaveBeenCalledWith(expect.objectContaining({captcha_verified: true}));
+  expect(vi.mocked(fetch).mock.invocationCallOrder[0]).toBeLessThan(rpc.customerCheckReplay.mock.invocationCallOrder[0]);
+});
+it("Redis unavailable rejects invalid captcha before any database call", async () => {
+  vi.mocked(rateLimiter.hit).mockRejectedValue(new Error("offline"));
+  vi.mocked(fetch).mockResolvedValue(Response.json({success: false}));
+  expect(await err(await order(req(body("invalid-token")), context()))).toBe("CAPTCHA_FAILED");
+  for (const fn of Object.values(rpc)) expect(fn).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 it("quote preserves estimates/limit fields and rejects malformed bodies and absent did", async () => {
   const value = {

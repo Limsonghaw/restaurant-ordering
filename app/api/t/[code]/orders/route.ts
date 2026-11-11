@@ -44,6 +44,16 @@ export async function POST(request: Request, context: CustomerRouteContext) {
       new_bill_token_hash: sha256(token),
       captcha_verified: false,
     };
+    const probeDeviceRequiresCaptcha = await limit("orderProbeDevice", device_hash);
+    const probeIpRequiresCaptcha = await limit("orderProbeIp", ip_hash);
+    if (probeDeviceRequiresCaptcha || probeIpRequiresCaptcha) {
+      if (!body.captcha_token)
+        throw new AppError("CAPTCHA_REQUIRED", { scope: "probe" });
+      args.captcha_verified = await verifyTurnstile(body.captcha_token, {
+        table_id: table.table_id,
+        request_id: body.client_request_id,
+      });
+    }
     const check = await customerCheckReplay(args);
     if (check.status === "mismatch") throw new AppError(check.code);
     let result;
@@ -63,12 +73,13 @@ export async function POST(request: Request, context: CustomerRouteContext) {
         throw new AppError("CAPTCHA_REQUIRED", { scope: requiredScope });
       // Supplied tokens are always verified for new submissions.
       args.captcha_verified =
-        requiredScope || body.captcha_token
+        args.captcha_verified ||
+        (requiredScope || body.captcha_token
           ? await verifyTurnstile(body.captcha_token, {
               table_id: table.table_id,
               request_id: body.client_request_id,
             })
-          : false;
+          : false);
       result = await customerPlaceOrder(args);
     }
     const response = json(result, result.replayed ? 200 : 201);

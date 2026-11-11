@@ -40,6 +40,7 @@ const req = (
   });
 const context = () => ({ params: Promise.resolve({ code }) });
 beforeEach(() => {
+  vi.stubEnv("VERCEL", "1");
   vi.stubEnv("QR_SIGNING_SECRET", "test-qr");
   vi.stubEnv("DEVICE_COOKIE_SECRET", "test-device");
   vi.stubEnv("CLIENT_HASH_SECRET", "test-hash");
@@ -94,17 +95,18 @@ it("production ignores x-real-ip and malformed Vercel headers never fall back", 
     ),
   ).toBe("unknown");
 });
-it("confirmed database replay returns 200 without any rate hits, CAPTCHA or new order", async () => {
+it("confirmed replay uses probe quota only, then rejects beyond 30", async () => {
   rpc.customerCheckReplay.mockResolvedValue({ status: "replay" });
   rpc.customerPlaceOrder.mockResolvedValue({
     replayed: true,
     bill_token_issued: false,
   });
-  vi.mocked(rateLimiter.hit).mockRejectedValue(new Error("offline"));
-  for (let i = 0; i < 25; i++)
+  for (let i = 0; i < 30; i++)
     expect((await order(req(), context())).status).toBe(200);
-  expect(rateLimiter.hit).not.toHaveBeenCalled();
-  expect(rpc.customerPlaceOrder).toHaveBeenCalledTimes(25);
+  expect((await order(req(), context())).status).toBe(429);
+  expect(vi.mocked(rateLimiter.hit).mock.calls.every(([key]) => key.startsWith("orderProbe"))).toBe(true);
+  expect(rpc.customerCheckReplay).toHaveBeenCalledTimes(30);
+  expect(rpc.customerPlaceOrder).toHaveBeenCalledTimes(30);
 });
 it("random IDs cannot bypass device hard limit", async () => {
   for (let i = 0; i < 4; i++) {
@@ -149,13 +151,13 @@ it("customer suspension wording is isolated from shared merchant errors", async 
   ).toBe("店铺已被平台停用，请联系平台");
 });
 it.each([0, 0.2, 120.1])(
-  "Retry-After rounds %s up with a minimum of 1",
+  "Retry-After rounds positive %s up and defaults invalid values",
   (n) => {
     expect(
       toErrorResponse(
         new AppError("RATE_LIMITED", { retry_after_seconds: n }),
       ).headers.get("retry-after"),
-    ).toBe(String(Math.max(1, Math.ceil(n))));
+    ).toBe(String(n > 0 ? Math.max(1, Math.ceil(n)) : 60));
   },
 );
 it("limiter supplies scope window seconds instead of fixed 60", async () => {
@@ -314,16 +316,16 @@ it("JSON body stream read errors fail closed before the database", async () => {
   expect(rpc.customerCheckReplay).not.toHaveBeenCalled();
 });
 
-it("hard-limited requests run only the read-only check", async () => {
+it("probe-limited requests never reach database", async () => {
   vi.mocked(rateLimiter.hit).mockResolvedValue(10000);
   expect((await order(req(), context())).status).toBe(429);
-  expect(rpc.customerCheckReplay).toHaveBeenCalledOnce();
+  expect(rpc.customerCheckReplay).not.toHaveBeenCalled();
   expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
 });
 it("check infrastructure errors fail closed before rates or writes", async () => {
   rpc.customerCheckReplay.mockRejectedValue(new AppError("INTERNAL"));
   expect((await order(req(), context())).status).toBe(503);
-  expect(rateLimiter.hit).not.toHaveBeenCalled();
+  expect(rateLimiter.hit).toHaveBeenCalledTimes(2);
   expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
 });
 it("check mismatch preserves conflict semantics", async () => {
@@ -332,7 +334,7 @@ it("check mismatch preserves conflict semantics", async () => {
     code: "IDEMPOTENCY_KEY_REUSED",
   });
   expect((await order(req(), context())).status).toBe(409);
-  expect(rateLimiter.hit).not.toHaveBeenCalled();
+  expect(rateLimiter.hit).toHaveBeenCalledTimes(2);
   expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
 });
 it("explicit local forwarded IP uses first address and IPv6 normalization", () => {
@@ -361,3 +363,31 @@ it.each(["NODE_ENV", "VERCEL_ENV"])(
     ).toBe("unknown");
   },
 );
+
+it.each(["orderProbeDevice", "orderProbeIp"])("%s failure requires captcha before any RPC", async (scope) => {
+  vi.mocked(rateLimiter.hit).mockImplementation(async (key) => {
+    if (key.startsWith(`${scope}:`)) throw new Error("offline");
+    return 1;
+  });
+  const response = await order(req(), context());
+  expect((await response.json()).error).toMatchObject({
+    code: "CAPTCHA_REQUIRED", details: { scope: "probe" },
+  });
+  expect(rpc.customerCheckReplay).not.toHaveBeenCalled();
+  expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
+});
+it("20 random IDs respect an almost-exhausted probe budget", async () => {
+  const memory = new MemoryRateLimiter();
+  vi.mocked(rateLimiter.hit).mockImplementation((key, window) =>
+    memory.hit(key, window).then(n => key.startsWith("orderProbeDevice:") ? n + 25 : n));
+  for (let i = 0; i < 20; i++)
+    await order(req(JSON.stringify({items, client_request_id:
+      `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`})), context());
+  expect(rpc.customerCheckReplay).toHaveBeenCalledTimes(5);
+  expect(rpc.customerPlaceOrder).toHaveBeenCalledTimes(3);
+});
+it("probe IP quota is independent and hard at 60", async () => {
+  const memory = new MemoryRateLimiter();
+  for (let i = 0; i < 60; i++) await limit("orderProbeIp", "ip", memory);
+  await expect(limit("orderProbeIp", "ip", memory)).rejects.toMatchObject({code:"RATE_LIMITED"});
+});

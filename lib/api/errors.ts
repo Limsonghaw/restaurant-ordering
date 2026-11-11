@@ -66,8 +66,8 @@ function retryAfter(error: unknown): string {
   const seconds =
     error instanceof AppError ? error.details?.retry_after_seconds : undefined;
   return String(
-    typeof seconds === "number" && Number.isFinite(seconds)
-      ? Math.max(1, Math.ceil(seconds))
+    typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+      ? Math.min(3600, Math.max(1, Math.ceil(seconds)))
       : 60,
   );
 }

@@ -53,6 +53,8 @@ export class RedisRateLimiter implements RateLimiter {
 }
 export const rateLimiter: RateLimiter = new RedisRateLimiter();
 export const scopes = {
+  orderProbeDevice: [30, 60000],
+  orderProbeIp: [60, 60000],
   orderDeviceMinute: [3, 60000],
   orderDeviceHour: [20, 3600000],
   orderTable: [6, 300000],

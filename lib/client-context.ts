@@ -1,3 +1,4 @@
+import { isNonLocalEnv } from "./env";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { secret } from "./hash";
@@ -5,16 +6,17 @@ import { secret } from "./hash";
 // Never trust client-supplied x-real-ip outside local development/tests.
 export function trustedIp(request: Request): string {
   const ip =
-    request.headers.get("x-vercel-forwarded-for") ??
-    (process.env.NODE_ENV !== "production" &&
-    process.env.VERCEL_ENV !== "production" &&
-    process.env.TRUST_LOCAL_IP === "1"
-      ? (request.headers.get("x-forwarded-for")?.split(",")[0] ??
-        request.headers.get("x-real-ip"))
-      : ["development", "test"].includes(process.env.NODE_ENV ?? "") &&
-          process.env.VERCEL_ENV !== "production"
-        ? request.headers.get("x-real-ip")
-        : null);
+    (process.env.VERCEL === "1"
+      ? request.headers.get("x-vercel-forwarded-for")
+      : null) ??
+    (!isNonLocalEnv()
+      ? process.env.TRUST_LOCAL_IP === "1"
+        ? (request.headers.get("x-forwarded-for")?.split(",")[0] ??
+          request.headers.get("x-real-ip"))
+        : ["development", "test"].includes(process.env.NODE_ENV ?? "")
+          ? request.headers.get("x-real-ip")
+          : null
+      : null);
   if (!ip || ip.includes("%") || !isIP(ip.trim())) return "unknown";
   const value = ip.trim();
   if (isIP(value) === 4) return value;

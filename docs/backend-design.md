@@ -418,7 +418,7 @@ export type ApiError = { error: { code: ErrorCode; message: string; details?: un
 
 1. zod 校验 PlaceOrderBody；读取并验签设备 cookie（没有或无效 → 400 VALIDATION_FAILED，前端先调 C1 拿 cookie）。
 2. 验二维码签名 → TABLE_INVALID。
-3. 重放在应用计数前调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过应用限流与 Turnstile；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
+3. 请求先通过独立 orderProbe 硬限流（每设备 30/min、每 IP 60/min，超额硬拒绝 429；限流器异常时必须在任何数据库调用前通过绑定 table_id + client_request_id 的 Turnstile，无 token 返回 CAPTCHA_REQUIRED（scope=probe），验证失败返回 CAPTCHA_FAILED，成功结果在本请求后续 scope 复用、不重复 siteverify），再调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过下单配额与后续 Turnstile 校验；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
 4. Upstash 限流（设备 → RATE_LIMITED，带 Retry-After；桌级超 6 次/5 分钟 → 要求 Turnstile，硬拒绝由数据库 table_db 兜底；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；桌级超 6 次/5 分钟、IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 captcha_token → CAPTCHA_REQUIRED（应用层 details.scope 为 device/table/ip/store），校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
 5. 用 CSPRNG 生成新令牌明文 T，经 lib/supabase/customer.ts（postgres.js，customer_api 身份）调用 `customer_place_order(…, p_device_hash, p_ip_hash, p_bill_token_hash = sha256(cookie 里的旧令牌), p_new_bill_token_hash = sha256(T), p_captcha_verified)`；哈希必须是 64 位 hex（NULL → VALIDATION_FAILED）。
 6. RPC 内：入参判空 → 锁桌子行、店铺行加 for share（L9）→ 店铺/桌子/营业检查 → 幂等（同 request_id 同内容返回原单 replayed=true，同一设备没收到令牌时重新下发；内容不同 IDEMPOTENCY_KEY_REUSED）→ require_captcha → 拉黑 → 数据库兜底限流（桌 / 设备；同店同 IP 10 分钟 ≥100 单 RATE_LIMITED，≥20 单且未过 Turnstile → CAPTCHA_REQUIRED，details.scope = 'ip_db'）→ validate_cart（ITEM_UNAVAILABLE / PRICE_CHANGED，整单拒绝）→ 上限 → 取或开 open 账单 → 沿用或签发本设备令牌（scope=own_orders）→ 写订单（含 device_seq_in_bill）、order_client_meta 与快照明细。
@@ -1232,5 +1232,7 @@ export interface QuoteEstimate {
 | 低-6 | pgTAP 补 value_hash 列权限、不能直接 delete 拉黑，plan(25) | auth_roles.test.sql | 已完成（需 supabase start 实跑） |
 | 信息 1–5 | 不阻塞；信息-4 跳转统一写 new URL(safeNext(next), SITE)，在 PR2 / 前端顺手处理 | — | 记录 |
 
-本地运行：`CUSTOMER_DB_SSL` 默认 `require`。仅显式 `disable`、连接主机为 localhost / 127.0.0.1 / ::1，且 NODE_ENV、VERCEL_ENV 均非 production 时关闭 SSL；远端 disable 仍用 require，避免配置误用降级传输安全。生产不要设置本地开关。
-本地缺少可信 IP 头时可显式 `TRUST_LOCAL_IP=1`，优先读取 XFF 第一个地址，再回退 x-real-ip，同样规范化 IPv4 / IPv6 /64；NODE_ENV 或 VERCEL_ENV 为 production 时开关无效。Vercel 头优先且非法时不回退。生产不要设置；unknown 共桶与监控要求不变。
+本地运行：`isNonLocalEnv()` 统一定义为 NODE_ENV=production 或 VERCEL_ENV 去空格非空（包括 preview/development）。instrumentation.register 在服务就绪前拒绝非本地环境设置任何 TRUST_LOCAL_IP 或 CUSTOMER_DB_SSL=disable；CI 未设置这两个开关，构建不受影响。
+SSL 默认 require，仅本地显式 disable 且 URL.hostname 严格等于 localhost / 127.0.0.1 可关闭；不接受 ::1 或主机前后缀。postgres URL 的 LOCALHOST 保留大小写，因此也维持 require。
+只有 VERCEL=1 信任 x-vercel-forwarded-for；否则非本地一律 unknown。本地 TRUST_LOCAL_IP=1 取 XFF 首地址再取 x-real-ip；未启用时保留 development/test 的 x-real-ip 支持。非法平台头不回退，unknown 共桶需监控。
+Realtime bills 事件按本店 bill_id 刷新；无 id 事件按订阅水位减 30 秒增量补拉，只派发 new/accepted 或 Asia/Kuala_Lumpur 当天创建的订单，避免历史终态订单灌入列表。

@@ -5,7 +5,7 @@ begin;
 -- Statements under test still run with the target role's own privileges / RLS.
 grant customer_api, authenticated, anon to postgres;
 create extension if not exists pgtap with schema extensions;
-select plan(122);
+select plan(132);
 
 insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data)
 values ('aaaa0000-0000-4000-8000-000000000001', 'security-a@example.invalid', now(), '{}'),
@@ -232,6 +232,53 @@ select public.customer_place_order(f.store_id,f.table_id,1,f.request_id,repeat('
 select is(public.customer_check_replay(store_id,table_id,1,request_id,repeat('a',64),repeat('b',64)), '{"status":"replay"}'::jsonb,'0009 replay') from replay_fixture;
 select is(public.customer_check_replay(store_id,table_id,1,request_id,repeat('f',64),repeat('b',64)), '{"status":"mismatch","code":"IDEMPOTENCY_KEY_REUSED"}'::jsonb,'0009 mismatch') from replay_fixture;
 select is(public.customer_check_replay(store_id,table_id,1,gen_random_uuid(),repeat('a',64),repeat('b',64)), '{"status":"missing"}'::jsonb,'0009 missing') from replay_fixture;
+
+select ok(prosrc !~* 'for\s+update','0009 no FOR UPDATE') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+select ok(prosrc !~* 'for\s+share','0009 no FOR SHARE') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+-- Replay fixture was placed without an existing token.
+select is(public.customer_place_order(f.store_id,f.table_id,1,f.request_id,repeat('a',64),
+ jsonb_build_array(jsonb_build_object('item_id',x.item_id,'quantity',1,'unit_price_cents',100)),
+ repeat('b',64),repeat('c',64),null,repeat('9',64),true)->>'replayed','true','formal second call replays') from replay_fixture f cross join fixture x;
+select is((select count(*)::integer from public.orders o join replay_fixture f on o.store_id=f.store_id and o.request_id=f.request_id),1,'formal duplicate has one order');
+
+
+-- 0008 coverage gaps: old QR with valid own token, a genuine foreign token,
+-- and a current QR order without an existing token.
+create function pg_temp.fix2_place(v integer, tok text, newtok text) returns jsonb language sql as $$
+select public.customer_place_order(f.store_id,f.table_id,v,gen_random_uuid(),repeat('a',64),
+ jsonb_build_array(jsonb_build_object('item_id',x.item_id,'quantity',1,'unit_price_cents',100)),
+ repeat('b',64),repeat('c',64),tok,newtok,true) from replay_fixture f cross join fixture x
+$$;
+create function pg_temp.fix2_old_error() returns text language plpgsql as $$
+begin
+ perform pg_temp.fix2_place(1,repeat('9',64),repeat('4',64));
+ return 'unexpected success';
+exception when sqlstate 'P0001' then return sqlerrm;
+end $$;
+update public.dining_tables set qr_version=2 where id=(select table_id from replay_fixture);
+select is(pg_temp.fix2_old_error(),'TABLE_INVALID','0008 old QR cannot order with valid own token');
+select is(pg_temp.fix2_place(2,null,repeat('4',64))->>'bill_token_issued','true','0008 current QR without token issues token');
+create temp table foreign_token_fixture as
+select store_id,gen_random_uuid() as table_id,gen_random_uuid() as bill_id
+from public.store_members where user_id='bbbb0000-0000-4000-8000-000000000001';
+insert into public.dining_tables(id,store_id,label) select table_id,store_id,'foreign-token' from foreign_token_fixture;
+insert into public.bills(id,store_id,table_id) select bill_id,store_id,table_id from foreign_token_fixture;
+insert into public.bill_access_tokens(bill_id,store_id,token_hash,device_hash,scope)
+select bill_id,store_id,repeat('8',64),repeat('b',64),'own_orders' from foreign_token_fixture;
+create function pg_temp.fix2_foreign_read() returns text language plpgsql as $$
+begin
+ perform public.customer_get_bill(store_id,table_id,2,repeat('8',64),repeat('b',64)) from replay_fixture;
+ return 'unexpected success';
+exception when sqlstate 'P0001' then return sqlerrm;
+end $$;
+select is(pg_temp.fix2_foreign_read(),'BILL_TOKEN_INVALID','0008 genuine other-store token cannot read');
+create temp table foreign_order_result as select pg_temp.fix2_place(2,repeat('8',64),repeat('5',64)) as value;
+select is(value->>'bill_token_issued','true','0008 foreign token not reused for order') from foreign_order_result;
+select is((select t.store_id from public.order_client_meta m join public.bill_access_tokens t on t.id=m.bill_token_id
+ where m.order_id=(select (value->'order'->>'id')::uuid from foreign_order_result)),
+ (select store_id from replay_fixture),'0008 order token belongs to local store');
+select is((select bill_id from public.bill_access_tokens where token_hash=repeat('8',64)),
+ (select bill_id from foreign_token_fixture),'0008 foreign token binding unchanged');
 
 select * from finish();
 rollback;

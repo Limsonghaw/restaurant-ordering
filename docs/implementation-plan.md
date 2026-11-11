@@ -199,7 +199,7 @@ A 组顾客接口与数据库补充（不涉及 B 组 lib/data、lib/realtime）
 
 - `0008_bill_qr_rotated.sql` 仅替换 customer_get_bill；先用当前版本检查店铺，再验证令牌的店/桌/设备归属。本人令牌先判撤销（保留最早原因）、再判过期；仍有效的新令牌配旧码返回 404。无本人令牌的旧码统一 404；店停用优先 403。保留函数级 3 秒超时、空 search_path、SECURITY DEFINER 与 customer_api 独占 EXECUTE。
 - PR3 验收第 6 条由以下规则补充：旧码本人令牌得到 410 qr_rotated 并清 cookie，410 不增加 invalidIp；bill_paid、expired 同样清 cookie。PGlite 覆盖精确说明 14 项，pgTAP CI 复验配置/授权及判定顺序。
-- 重放在应用计数前调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过应用限流与 Turnstile；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
+- 请求先通过独立 orderProbe 硬限流（每设备 30/min、每 IP 60/min，故障拒绝），再调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过下单配额与 Turnstile；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
 - L-1：生产只支持 Vercel（平台覆盖 x-vercel-forwarded-for）；x-real-ip 仅本地开发/测试使用，生产缺可信头归 unknown。IPv6 /64 分桶，IPv4-mapped 统一为 IPv4。上线监控应统计 unknown 比例并报警；本地不接监控服务。
 - L-2：前端 PR-D 为 place_order widget 设置 `cData = table_id + '_' + client_request_id`，请求字段仍是 `captcha_token`。服务端发送 idempotency_key=client_request_id，严格核对 success/action/hostname/cdata；仅 Cloudflare 官方 always-pass 测试 secret 允许缺 cdata，生产不得使用测试 key。
 - L-4：函数级 statement_timeout 已覆盖，连接参数经 Supavisor 可能被拒，已删除；连接仍保持 max=1、prepare=false、ssl=require。
@@ -301,5 +301,7 @@ A 组顾客接口与数据库补充（不涉及 B 组 lib/data、lib/realtime）
 
 已拍板（2026-11-04）：邮箱或手机号注册、验证通过后才建店（含 M5）；首单审核做成店家开关、默认关，v1 只建字段，加入码不做（H1）。
 
-本地运行：`CUSTOMER_DB_SSL` 默认 `require`。仅显式 `disable`、连接主机为 localhost / 127.0.0.1 / ::1，且 NODE_ENV、VERCEL_ENV 均非 production 时关闭 SSL；远端 disable 仍用 require，避免配置误用降级传输安全。生产不要设置本地开关。
-本地缺少可信 IP 头时可显式 `TRUST_LOCAL_IP=1`，优先读取 XFF 第一个地址，再回退 x-real-ip，同样规范化 IPv4 / IPv6 /64；NODE_ENV 或 VERCEL_ENV 为 production 时开关无效。Vercel 头优先且非法时不回退。生产不要设置；unknown 共桶与监控要求不变。
+本地运行：`isNonLocalEnv()` 统一定义为 NODE_ENV=production 或 VERCEL_ENV 去空格非空（包括 preview/development）。instrumentation.register 在服务就绪前拒绝非本地环境设置任何 TRUST_LOCAL_IP 或 CUSTOMER_DB_SSL=disable；CI 未设置这两个开关，构建不受影响。
+SSL 默认 require，仅本地显式 disable 且 URL.hostname 严格等于 localhost / 127.0.0.1 可关闭；不接受 ::1 或主机前后缀。postgres URL 的 LOCALHOST 保留大小写，因此也维持 require。
+只有 VERCEL=1 信任 x-vercel-forwarded-for；否则非本地一律 unknown。本地 TRUST_LOCAL_IP=1 取 XFF 首地址再取 x-real-ip；未启用时保留 development/test 的 x-real-ip 支持。非法平台头不回退，unknown 共桶需监控。
+Realtime bills 事件按本店 bill_id 刷新；无 id 事件按订阅水位减 30 秒增量补拉，只派发 new/accepted 或 Asia/Kuala_Lumpur 当天创建的订单，避免历史终态订单灌入列表。

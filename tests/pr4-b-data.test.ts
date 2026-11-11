@@ -204,7 +204,7 @@ it("hydrates realtime order events instead of forwarding raw payload; suppresses
   const channel = { on: vi.fn(), subscribe: vi.fn() };
   channel.on.mockReturnValue(channel);
   fake.channel.mockReturnValue(channel);
-  const q = query([{ id: "o", device_seq_in_bill: 4 }]);
+  const q = query([{ id: "o", device_seq_in_bill: 4, status: "new" }]);
   fake.from.mockReturnValue(q);
   const callbacks = {
     onInsert: vi.fn(),
@@ -219,11 +219,15 @@ it("hydrates realtime order events instead of forwarding raw payload; suppresses
     expect(callbacks.onInsert).toHaveBeenCalledWith({
       id: "o",
       device_seq_in_bill: 4,
+      status: "new",
     }),
   );
   expect(q.eq).toHaveBeenCalledWith("id", "o");
   channel.on.mock.calls[1][2]({ new: { id: "b" } });
   await vi.waitFor(() => expect(callbacks.onUpdate).toHaveBeenCalled());
+  expect(q.eq).toHaveBeenCalledWith("bill_id", "b");
+  channel.on.mock.calls[1][2]({ eventType: "DELETE", new: {} });
+  await vi.waitFor(() => expect(q.gt).toHaveBeenCalledWith("updated_at", expect.any(String)));
   stop();
   callbacks.onUpdate.mockClear();
   channel.on.mock.calls[1][2]({ new: { id: "b" } });
@@ -247,4 +251,26 @@ it("does not create channels after early cleanup or for a different store", asyn
     expect(callbacks.onConnectionChange).toHaveBeenCalledWith("disconnected"),
   );
   expect(fake.channel).not.toHaveBeenCalled();
+});
+
+it("bill refresh suppresses historical terminal orders but keeps today's terminal and active orders", async () => {
+  const channel = { on: vi.fn(), subscribe: vi.fn() };
+  channel.on.mockReturnValue(channel);
+  fake.channel.mockReturnValue(channel);
+  const rows = [
+    { id: "old", status: "served", created_at: "2000-01-01", updated_at: new Date().toISOString() },
+    { id: "today", status: "served", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    { id: "active", status: "accepted", created_at: "2000-01-01", updated_at: new Date().toISOString() },
+  ];
+  const q = query(rows);
+  fake.from.mockReturnValue(q);
+  const callbacks = { onInsert: vi.fn(), onUpdate: vi.fn(), onConnectionChange: vi.fn() };
+  const stop = live.subscribeStoreOrders("s", callbacks);
+  await vi.waitFor(() => expect(channel.subscribe).toHaveBeenCalled());
+  channel.on.mock.calls[1][2]({ new: { id: "bill" } });
+  await vi.waitFor(() => expect(callbacks.onUpdate).toHaveBeenCalledTimes(2));
+  expect(callbacks.onUpdate.mock.calls.map(([row]) => row.id)).toEqual(["today", "active"]);
+  expect(q.eq).toHaveBeenCalledWith("bill_id", "bill");
+  expect(q.eq).toHaveBeenCalledWith("store_id", "s");
+  stop();
 });

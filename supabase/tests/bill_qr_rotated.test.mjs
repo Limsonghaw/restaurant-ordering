@@ -89,6 +89,31 @@ try {
   await error(() => bill(1,'malformed'),'TABLE_INVALID');
   await error(() => bill(1,'9'.repeat(64)),'TABLE_INVALID');
   await db.exec('rollback to savepoint malformed_stale');
+  // Valid own token cannot authorize an old QR to place an order.
+  await q('update dining_tables set qr_version=2 where id=$1',[t.id]);
+  await error(() => role(() => q('select customer_place_order($1,$2,1,$3,$4,$5,$6,$7,$8,$9,false)',
+    [store,t.id,randomUUID(),'f'.repeat(64),cart,D1,'1'.repeat(64),K1,K2])), 'TABLE_INVALID');
+  await q('update dining_tables set qr_version=1 where id=$1',[t.id]);
+  // A real store B token must not grant access to store A.
+  const [{id:uidB}] = await q("insert into auth.users(email,email_confirmed_at) values ('store-b@example.invalid',now()) returning id");
+  const [{store_id:storeB}] = await q('select store_id from store_members where user_id=$1',[uidB]);
+  const [{id:tableB}] = await q("insert into dining_tables(store_id,label) values ($1,'B') returning id",[storeB]);
+  const [{id:billB}] = await q('insert into bills(store_id,table_id) values ($1,$2) returning id',[storeB,tableB]);
+  const tokenB = '8'.repeat(64);
+  await q("insert into bill_access_tokens(bill_id,store_id,token_hash,device_hash,scope) values ($1,$2,$3,$4,'own_orders')",[billB,storeB,tokenB,D1]);
+  await error(() => bill(1,tokenB), 'BILL_TOKEN_INVALID');
+  const cross = (await role(() => q('select customer_place_order($1,$2,1,$3,$4,$5,$6,$7,$8,$9,false) result',
+    [store,t.id,randomUUID(),'f'.repeat(64),cart,D1,'1'.repeat(64),tokenB,'7'.repeat(64)])))[0].result;
+  // Ordering is token-optional: foreign token is rejected as authorization, a new local token is issued.
+  equal(cross.bill_token_issued,true);
+  equal((await q('select bt.store_id from order_client_meta m join bill_access_tokens bt on bt.id=m.bill_token_id where m.order_id=$1',[cross.order.id]))[0].store_id,store);
+  equal((await q('select bill_id from bill_access_tokens where token_hash=$1',[tokenB]))[0].bill_id,billB);
+  const noTokenRequest = randomUUID();
+  const fresh = await place(u.id,1,'6'.repeat(64),noTokenRequest);
+  equal(fresh.replayed,false);
+  equal(fresh.bill_token_issued,true);
+  equal((await place(u.id,1,'5'.repeat(64),noTokenRequest)).replayed,true);
+  equal((await q('select count(*)::int n from orders where store_id=$1 and request_id=$2',[store,noTokenRequest]))[0].n,1);
   // A2: unknown IDs and confirmed replays never write or rotate tokens in the check.
   const check = request => role(async () => (await q('select customer_check_replay($1,$2,1,$3,$4,$5) result',[store,t.id,request,'f'.repeat(64),D1]))[0].result);
   const request = randomUUID();

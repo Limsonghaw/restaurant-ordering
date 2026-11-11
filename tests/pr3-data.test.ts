@@ -261,7 +261,7 @@ it.each(["localhost", "127.0.0.1", "[::1]", "database.invalid"])(
     expect(customerDatabaseSsl(url)).toBe("require");
     vi.stubEnv("CUSTOMER_DB_SSL", "disable");
     expect(customerDatabaseSsl(url)).toBe(
-      host === "database.invalid" ? "require" : false,
+      ["database.invalid", "[::1]"].includes(host) ? "require" : false,
     );
     vi.stubEnv("NODE_ENV", "production");
     expect(customerDatabaseSsl(url)).toBe("require");
@@ -270,3 +270,26 @@ it.each(["localhost", "127.0.0.1", "[::1]", "database.invalid"])(
     expect(customerDatabaseSsl(url)).toBe("require");
   },
 );
+
+it.each(["exhausted", "offline"])("probe %s never opens a database transaction", async (mode) => {
+  const { POST } = await import("../app/api/t/[code]/orders/route");
+  const { rateLimiter } = await import("../lib/ratelimit");
+  const { issueDevice } = await import("../lib/client-context");
+  const { signTableCode } = await import("../lib/qr");
+  vi.stubEnv("DEVICE_COOKIE_SECRET", "unit-device");
+  vi.stubEnv("CLIENT_HASH_SECRET", "unit-client");
+  const hit = vi.spyOn(rateLimiter, "hit");
+  if (mode === "offline") hit.mockRejectedValue(new Error("offline"));
+  else hit.mockResolvedValue(1000);
+  try {
+    const response = await POST(new Request("https://site.example.invalid/api/t/code/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: `did=${issueDevice()}` },
+      body: JSON.stringify({client_request_id: table.table_id,
+        items:[{item_id:table.table_id,quantity:1,unit_price_cents:100}]}),
+    }), {params:Promise.resolve({code:signTableCode(table)})});
+    expect((await response.json()).error.code).toBe(mode === "offline" ? "CAPTCHA_REQUIRED" : "RATE_LIMITED");
+    expect(fake.query).not.toHaveBeenCalled();
+    expect(fake.begin).not.toHaveBeenCalled();
+  } finally { hit.mockRestore(); }
+});
