@@ -13,6 +13,7 @@ import {
 } from "../data";
 import { routes } from "../routes";
 import { Button, Modal, Toggle } from "./common";
+import { MockPanelB } from "./mock-panel-b";
 import { orderScenariosA, scenarioLabelsA } from "./mock-panel-a";
 export function MockPanel() {
   const path = usePathname();
@@ -118,6 +119,7 @@ export function MockPanel() {
                   {label}
                 </Button>
               ))}
+              <MockPanelB />
               <h3>演示入口</h3>
               <div className="demo-links">
                 {snapshot.demo_codes.map((c) => (

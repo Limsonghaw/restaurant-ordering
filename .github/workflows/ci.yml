@@ -32,7 +32,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync } from 'node:fs';
           import { join } from 'node:path';
-          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok/;
+          const forbidden = /开发用模拟控制面板|mock-trigger|ro-mock:state|mock-captcha-ok|ro-mock:live-b|mock-live-device/;
           function check(directory) {
             for (const entry of readdirSync(directory, { withFileTypes: true })) {
               const path = join(directory, entry.name);
