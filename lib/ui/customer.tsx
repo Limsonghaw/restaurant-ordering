@@ -506,7 +506,7 @@ export function CartPage({ code }: { code: string }) {
   const [clear, setClear] = useState(false);
   const [remove, setRemove] = useState<number>();
   const [editing, setEditing] = useState<number>();
-  const request = useRef("");
+  const [requestId, setRequestId] = useState("");
   const locked = useRef(false);
   const seconds = useCountdown(error);
   const lastCart = useRef(cart);
@@ -524,7 +524,7 @@ export function CartPage({ code }: { code: string }) {
   }, [loadMenu]);
   useEffect(() => {
     if (lastCart.current !== cart) {
-      request.current = "";
+      setRequestId("");
       lastCart.current = cart;
       setError((current: unknown) =>
         current instanceof DataError && current.code === "PRICE_CHANGED"
@@ -573,9 +573,10 @@ export function CartPage({ code }: { code: string }) {
         await quote.refresh();
         return;
       }
-      if (!request.current) request.current = crypto.randomUUID();
+      const id = requestId || crypto.randomUUID();
+      if (!requestId) setRequestId(id);
       await placeOrder(code, {
-        client_request_id: request.current,
+        client_request_id: id,
         items: cart,
         ...(token ? { captcha_token: token } : {}),
       });
@@ -588,7 +589,7 @@ export function CartPage({ code }: { code: string }) {
         if (e.code === "CAPTCHA_REQUIRED" || e.code === "CAPTCHA_FAILED") {
           setCaptcha(true);
           setConfirm(true);
-        } else if (e.code === "IDEMPOTENCY_KEY_REUSED") request.current = "";
+        } else if (e.code === "IDEMPOTENCY_KEY_REUSED") setRequestId("");
         else if (["PRICE_CHANGED", "ITEM_UNAVAILABLE"].includes(e.code)) {
           const fresh = await quote.refresh();
           if (fresh) reconcile(fresh);
@@ -875,6 +876,7 @@ export function CartPage({ code }: { code: string }) {
                 action="place_order"
                 key={captchaReset}
                 resetKey={captchaReset}
+                cData={`${menu.table.id}_${requestId}`}
                 onToken={(token) => void submit(token)}
                 onExpire={() =>
                   setError(

@@ -66,3 +66,50 @@ it.each(["place_order", "signup", "login", "recover", "resend"] as const)(
     }
   },
 );
+
+it("place_order 把 cData 传给 Turnstile，登录类验证不传", async () => {
+  const render = vi.fn(() => "widget");
+  vi.stubGlobal("window", { turnstile: { render, remove: vi.fn() } });
+  vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "placeholder-site-key");
+  hookProbe.active = true;
+  hookProbe.effects = [];
+  const cData = "table-id_request-id";
+  try {
+    Captcha({
+      action: "place_order",
+      resetKey: 0,
+      cData,
+      onToken: vi.fn(),
+      onExpire: vi.fn(),
+    });
+    hookProbe.effects.forEach((effect) => effect());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(render).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "place_order",
+        cData,
+        sitekey: "placeholder-site-key",
+      }),
+    );
+    render.mockClear();
+    hookProbe.effects = [];
+    Captcha({
+      action: "login",
+      resetKey: 0,
+      onToken: vi.fn(),
+      onExpire: vi.fn(),
+    });
+    hookProbe.effects.forEach((effect) => effect());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(render).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ cData: expect.anything() }),
+    );
+  } finally {
+    hookProbe.active = false;
+    vi.unstubAllGlobals();
+  }
+});

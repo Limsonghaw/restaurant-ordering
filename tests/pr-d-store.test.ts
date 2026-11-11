@@ -319,6 +319,13 @@ describe("PR-D P9 设置", () => {
     });
     expect(await finish(d.getStoreProfile())).toEqual(before);
   });
+  it("accepts a mock upload data URL as logo_path", async () => {
+    const d = await data();
+    const logo_path = "data:image/webp;base64,AAAA";
+    expect(await finish(d.saveStoreProfile({ logo_path }))).toMatchObject({
+      logo_path,
+    });
+  });
 });
 describe("PR-D P10 记录和通用错误", () => {
   it("按马来西亚自然日筛订单；未付跨日实时；取消不计数；营业额按paid_at", async () => {

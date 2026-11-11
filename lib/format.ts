@@ -35,6 +35,7 @@ export function errorMessage(error: unknown) {
     CAPTCHA_FAILED: "人机验证没有通过，请再试一次",
     CAPTCHA_REQUIRED: "请先完成人机验证",
     IDEMPOTENCY_KEY_REUSED: "请重新确认下单",
+    PAYLOAD_TOO_LARGE: "订单内容过多，请减少菜品后再下单",
   };
   return error instanceof DataError && Object.hasOwn(messages, error.code)
     ? messages[error.code]

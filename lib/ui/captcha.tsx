@@ -35,12 +35,14 @@ export function Captcha({
   onExpire,
   onReset,
   resetKey,
+  cData,
 }: {
   action: "place_order" | "signup" | "login" | "recover" | "resend";
   onToken: (token: string) => void;
   onExpire: () => void;
   onReset?: () => void;
   resetKey: number;
+  cData?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onToken, onExpire, onReset });
@@ -63,6 +65,7 @@ export function Captcha({
             widget = window.turnstile!.render(container.current, {
               sitekey: key,
               action,
+              ...(cData ? { cData } : {}),
               callback: (token: string) => callbacks.current.onToken(token),
               "expired-callback": () => callbacks.current.onExpire(),
               "error-callback": () => callbacks.current.onExpire(),
@@ -73,7 +76,7 @@ export function Captcha({
       cancelled = true;
       if (widget) window.turnstile?.remove(widget);
     };
-  }, [key, resetKey, action]);
+  }, [key, resetKey, action, cData]);
   return key ? (
     <div ref={container} />
   ) : process.env.NEXT_PUBLIC_DATA_SOURCE !== "mock" ? (

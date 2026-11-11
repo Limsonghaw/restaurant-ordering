@@ -15,6 +15,8 @@ import { getStoreTableQrLinks } from "../lib/data/supabase/table-qr";
 import { getStoreHistory } from "../lib/data/supabase/history";
 import {
   fetchOrdersUpdatedSince,
+  listLiveOrders,
+  listServedToday,
   subscribeStoreOrders,
 } from "../lib/data/supabase/live-orders";
 import { verifyTableCode } from "../lib/qr";
@@ -147,6 +149,58 @@ it("history rejects no store and anonymous", async () => {
   mocks.store.mockRejectedValue({ code: "UNAUTHENTICATED" });
   await expect(getStoreHistory("2026-11-11")).rejects.toMatchObject({
     code: "FORBIDDEN",
+  });
+});
+
+it("listLiveOrders keysets through 500-row pages including latest", async () => {
+  const row = { id: table, created_at: "2026-11-11T00:00:00Z" } as LiveOrder;
+  pages = [
+    Array(500).fill(row),
+    [{ ...row, id: "latest", created_at: "2026-11-11T03:00:00Z" }],
+  ];
+  expect(await listLiveOrders()).toHaveLength(501);
+  expect(calls).toHaveLength(2);
+  for (const call of calls) {
+    expect(call).toContainEqual({ method: "limit", args: [500] });
+    expect(call).toContainEqual({ method: "eq", args: ["store_id", store] });
+    expect(call).toContainEqual({
+      method: "in",
+      args: ["status", ["new", "accepted"]],
+    });
+  }
+  expect(calls[1]).toContainEqual({
+    method: "or",
+    args: [
+      `created_at.gt.${row.created_at},and(created_at.eq.${row.created_at},id.gt.${table})`,
+    ],
+  });
+});
+it("listServedToday keysets through 500-row pages including latest", async () => {
+  const row = { id: table, served_at: "2026-11-11T02:00:00Z" } as LiveOrder;
+  pages = [
+    Array(500).fill(row),
+    [{ ...row, id: "latest", served_at: "2026-11-11T00:00:00Z" }],
+  ];
+  expect(await listServedToday()).toHaveLength(501);
+  expect(calls).toHaveLength(2);
+  for (const call of calls) {
+    expect(call).toContainEqual({ method: "limit", args: [500] });
+    expect(call).toContainEqual({ method: "eq", args: ["store_id", store] });
+    expect(call).toContainEqual({ method: "eq", args: ["status", "served"] });
+    expect(call).toContainEqual({
+      method: "gte",
+      args: ["served_at", "2026-11-10T16:00:00.000Z"],
+    });
+    expect(call).toContainEqual({
+      method: "lt",
+      args: ["served_at", "2026-11-11T16:00:00.000Z"],
+    });
+  }
+  expect(calls[1]).toContainEqual({
+    method: "or",
+    args: [
+      `served_at.lt.${row.served_at},and(served_at.eq.${row.served_at},id.gt.${table})`,
+    ],
   });
 });
 it("incremental reads clamp ancient since and keyset through 500-row pages including latest", async () => {

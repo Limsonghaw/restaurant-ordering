@@ -347,10 +347,13 @@ export async function saveStoreProfile(
   if (
     next.logo_path !== null &&
     (typeof next.logo_path !== "string" ||
-      next.logo_path.length > 300 ||
-      !/^\/mock\/[\w./-]+$/.test(next.logo_path))
+      !(
+        next.logo_path.startsWith("data:image/webp;base64,") ||
+        (next.logo_path.length <= 300 &&
+          /^\/mock\/[\w./-]+$/.test(next.logo_path))
+      ))
   )
-    fail("VALIDATION_FAILED", "假数据图片路径需在 /mock/ 下，最多 300 字", {
+    fail("VALIDATION_FAILED", "请先通过上传设置店铺图片", {
       field: "logo_path",
     });
   next.is_profile_complete = !!(

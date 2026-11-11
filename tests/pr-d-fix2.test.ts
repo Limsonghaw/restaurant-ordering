@@ -296,3 +296,52 @@ it("business toggle saves only its own field immediately and keeps other drafts"
     save.mockRestore();
   }
 });
+
+it("settings logo uploads through uploadLogo and can be cleared", async () => {
+  const { SettingsPageD } = await import("../lib/ui/store-d");
+  const { FoodImage } = await import("../lib/ui/common");
+  vi.stubGlobal("document", new EventTarget());
+  const slots: unknown[] = [];
+  const upload = vi
+    .spyOn(d, "uploadLogo")
+    .mockResolvedValue("/mock/uploaded-logo.webp");
+  const renderSettings = () => run(SettingsPageD, slots);
+  try {
+    for (let i = 0; i < 5; i++) {
+      tree = renderSettings();
+      await vi.runAllTimersAsync();
+    }
+    tree = renderSettings();
+    expect(
+      find(
+        tree,
+        (e) => e.props.label === "店铺图片路径（假数据 /mock/，留空用占位图）",
+      ),
+    ).toHaveLength(0);
+    const input = find(
+      tree,
+      (e) => e.props["aria-label"] === "店铺图片" && e.props.type === "file",
+    )[0];
+    const file = new File(["x"], "logo.png", { type: "image/png" });
+    (
+      input.props.onChange as (e: {
+        target: { files: File[]; value: string };
+      }) => void
+    )({ target: { files: [file], value: "C:\\logo.png" } });
+    await Promise.resolve();
+    await Promise.resolve();
+    tree = renderSettings();
+    expect(upload).toHaveBeenCalledWith(file);
+    expect(find(tree, (e) => e.type === FoodImage)[0].props.path).toBe(
+      "/mock/uploaded-logo.webp",
+    );
+    (
+      find(tree, (e) => e.props.children === "移除图片")[0].props
+        .onClick as () => void
+    )();
+    tree = renderSettings();
+    expect(find(tree, (e) => e.type === FoodImage)[0].props.path).toBe(null);
+  } finally {
+    upload.mockRestore();
+  }
+});

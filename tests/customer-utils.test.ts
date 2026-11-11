@@ -30,6 +30,9 @@ describe("公共纯函数", () => {
     expect(errorMessage(new DataError("NOT_IMPLEMENTED", "未实现"))).toBe(
       "操作没有成功，请稍后再试",
     );
+    expect(
+      errorMessage(new DataError("PAYLOAD_TOO_LARGE" as never, "private")),
+    ).toBe("订单内容过多，请减少菜品后再下单");
     expect(Object.keys(goneMessages)).toEqual([
       "bill_paid",
       "qr_rotated",
