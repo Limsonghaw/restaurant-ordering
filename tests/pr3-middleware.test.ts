@@ -68,6 +68,7 @@ it("hung Supabase fetch aborts after five seconds; proxy returns 503 and refresh
   await vi.advanceTimersByTimeAsync(1);
   const response = await pending;
   expect(response.status).toBe(503);
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
   expect(response.cookies.get("refreshed")?.value).toBe("test-only");
   expect(response.headers.get("x-middleware-next")).toBeNull();
 });

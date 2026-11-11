@@ -418,7 +418,7 @@ export type ApiError = { error: { code: ErrorCode; message: string; details?: un
 
 1. zod 校验 PlaceOrderBody；读取并验签设备 cookie（没有或无效 → 400 VALIDATION_FAILED，前端先调 C1 拿 cookie）。
 2. 验二维码签名 → TABLE_INVALID。
-3. Upstash 限流（设备 / 桌 → RATE_LIMITED，带 Retry-After；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 turnstile_token → CAPTCHA_REQUIRED，校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
+3. Upstash 限流（设备 → RATE_LIMITED，带 Retry-After；桌级超 6 次/5 分钟 → 要求 Turnstile，硬拒绝由数据库 table_db 兜底；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；桌级超 6 次/5 分钟、IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 turnstile_token → CAPTCHA_REQUIRED，校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
 4. 用 CSPRNG 生成新令牌明文 T，经 lib/supabase/customer.ts（postgres.js，customer_api 身份）调用 `customer_place_order(…, p_device_hash, p_ip_hash, p_bill_token_hash = sha256(cookie 里的旧令牌), p_new_bill_token_hash = sha256(T), p_captcha_verified)`；哈希必须是 64 位 hex（NULL → VALIDATION_FAILED）。
 5. RPC 内：入参判空 → 锁桌子行、店铺行加 for share（L9）→ 店铺/桌子/营业检查 → 幂等（同 request_id 同内容返回原单 replayed=true，同一设备没收到令牌时重新下发；内容不同 IDEMPOTENCY_KEY_REUSED）→ require_captcha → 拉黑 → 数据库兜底限流（桌 / 设备；同店同 IP 10 分钟 ≥100 单 RATE_LIMITED，≥20 单且未过 Turnstile → CAPTCHA_REQUIRED，details.scope = 'ip_db'）→ validate_cart（ITEM_UNAVAILABLE / PRICE_CHANGED，整单拒绝）→ 上限 → 取或开 open 账单 → 沿用或签发本设备令牌（scope=own_orders）→ 写订单（含 device_seq_in_bill）、order_client_meta 与快照明细。
 6. bill_token_issued=true 时用 Set-Cookie 写入 `bt_{table}`；响应体不含令牌。
@@ -658,14 +658,14 @@ get_store_daily_stats('2026-11-04') →
 | 服务端定价 | 价格只取数据库；顾客价格只用于发现变化 | 篡改价格 |
 | 可信标识 | IP 只取 Vercel 可信头；设备 ID 由服务端签发 HttpOnly 签名 cookie；哈希按店 HMAC | 伪造 X-Device-Id / XFF 绕过限流与拉黑；跨店关联顾客 |
 | 令牌最小作用域 | 账单令牌绑定设备、只看本设备的订单；结账、重置桌码立即撤销 | 远程偷看同桌消费、跨批次泄露 |
-| Turnstile | 下单：store.require_captcha、同店同 IP 10 分钟超 20 单、店级 10 分钟超 120 单（自动 30 分钟）、Upstash 不可用（fail-closed）时要求，RPC 用 p_captcha_verified 再校验；注册 / 登录 / 找回密码 / 重发验证码始终要求（Supabase Auth CAPTCHA） | 大规模自动化、Redis 故障时失守、撞库 |
+| Turnstile | 下单：store.require_captcha、同桌 5 分钟超 6 次、同店同 IP 10 分钟超 20 单、店级 10 分钟超 120 单（自动 30 分钟）、Upstash 不可用（fail-closed）时要求，RPC 用 p_captcha_verified 再校验；注册 / 登录 / 找回密码 / 重发验证码始终要求（Supabase Auth CAPTCHA） | 大规模自动化、Redis 故障时失守、撞库 |
 | 一键拒单 + 拉黑 | block_client_from_order：取消订单（原因 other）+ 拉黑设备（可选 IP），默认 7 天 | 同一部手机反复捣乱 |
 | 异常监控 | audit_logs + Vercel 日志：429 次数、无效码次数、被取消率 >50% 的设备，每日汇总给平台管理员（PR5） | 及早发现攻击 |
 
 | scope | 阈值（滑动窗口） |
 | --- | --- |
 | 下单 / 设备 | 3 次/分钟，20 次/小时 |
-| 下单 / 桌 | 6 次/5 分钟 |
+| 下单 / 桌 | 超 6 次/5 分钟要求 Turnstile；验证通过可继续，硬拒绝由数据库 table_db 兜底 |
 | 下单 / IP | 20 次/10 分钟起要求 Turnstile；100 次/10 分钟 → 429（M-N3） |
 | 下单 / 店 | 120 次/10 分钟 → 触发 Turnstile |
 | 报价 / 设备 | 30 次/分钟 |

@@ -5,12 +5,24 @@ export async function proxy(request: NextRequest) {
   if (process.env.NEXT_PUBLIC_DATA_SOURCE === "mock")
     return NextResponse.next();
   let bridge: ReturnType<typeof createClient> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("Auth deadline exceeded")),
+        5000,
+      );
+    });
     bridge = createClient(request);
-    const decision = evaluateAccess(
-      request.nextUrl.pathname + request.nextUrl.search,
-      await getAuthState(bridge.supabase),
-    );
+    const decision = await Promise.race([
+      getAuthState(bridge.supabase).then((state) =>
+        evaluateAccess(
+          request.nextUrl.pathname + request.nextUrl.search,
+          state,
+        ),
+      ),
+      timeout,
+    ]);
     return bridge.respond(
       decision.allow
         ? undefined
@@ -22,6 +34,8 @@ export async function proxy(request: NextRequest) {
       headers: { "Cache-Control": "no-store" },
     });
     return bridge ? bridge.respond(response) : response;
+  } finally {
+    clearTimeout(timer);
   }
 }
 export const config = {

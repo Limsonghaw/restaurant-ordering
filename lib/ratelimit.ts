@@ -77,7 +77,7 @@ export async function limit(
     if (scope.startsWith("order")) return true;
     throw new AppError("RATE_LIMITED");
   }
-  if (scope === "orderStore") return count > maximum;
+  if (scope === "orderStore" || scope === "orderTable") return count > maximum;
   if (count > maximum) throw new AppError("RATE_LIMITED");
   return scope === "orderIp" && count > 20;
 }

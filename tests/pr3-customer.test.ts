@@ -156,7 +156,7 @@ it("21st invalid QR is limited despite forged XFF", async () => {
 });
 it.each(
   Object.entries(scopes).filter(
-    ([s]) => !["orderStore", "orderIp"].includes(s),
+    ([s]) => !["orderStore", "orderIp", "orderTable"].includes(s),
   ),
 )("scope %s enforces limit and window", async (scope, [max, window]) => {
   let now = 0;
@@ -351,3 +351,41 @@ it("C4 rejects token ownership mismatch via RPC and preserves own-orders payload
   rpc.customerGetBill.mockResolvedValue(payload);
   expect(await (await bill(req(), context())).json()).toEqual(payload);
 });
+
+it("table sixth order needs no captcha; seventh and later require it, valid token succeeds, window resets", async () => {
+  let now = 0;
+  memory = new MemoryRateLimiter(() => now);
+  for (let i = 1; i <= 6; i++) {
+    did = issueDevice();
+    expect((await order(req(body()), context())).status).toBe(201);
+    expect(rpc.customerPlaceOrder.mock.lastCall?.[0].captcha_verified).toBe(
+      false,
+    );
+  }
+  expect(fetch).not.toHaveBeenCalled();
+  for (let i = 7; i <= 8; i++) {
+    did = issueDevice();
+    expect(await err(await order(req(body()), context()))).toBe(
+      "CAPTCHA_REQUIRED",
+    );
+  }
+  expect(rpc.customerPlaceOrder).toHaveBeenCalledTimes(6);
+  did = issueDevice();
+  expect((await order(req(body("test-token")), context())).status).toBe(201);
+  expect(rpc.customerPlaceOrder.mock.lastCall?.[0].captcha_verified).toBe(true);
+  now = scopes.orderTable[1];
+  did = issueDevice();
+  expect((await order(req(body()), context())).status).toBe(201);
+  expect(rpc.customerPlaceOrder.mock.lastCall?.[0].captcha_verified).toBe(
+    false,
+  );
+});
+it.each(Object.keys(scopes))(
+  "scope %s keeps fail-closed behavior on limiter failure",
+  async (scope) => {
+    const failing = { hit: vi.fn().mockRejectedValue(new Error("offline")) };
+    const pending = limit(scope as keyof typeof scopes, "key", failing);
+    if (scope.startsWith("order")) await expect(pending).resolves.toBe(true);
+    else await expect(pending).rejects.toMatchObject({ code: "RATE_LIMITED" });
+  },
+);
