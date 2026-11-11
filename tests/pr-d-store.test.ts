@@ -424,7 +424,7 @@ describe("PR-D 补充契约", () => {
       details: { reason: "bill_paid" },
     });
   });
-  it("无店铺身份无权限，后端模式新出口为统一未实现占位", async () => {
+  it("无店铺身份无权限，后端未提供的历史统计仍为未实现占位", async () => {
     const d = await data();
     await d.authMockAction("identity", "nostore");
     await expect(finish(d.listStoreBills("open"))).rejects.toMatchObject({
@@ -433,7 +433,7 @@ describe("PR-D 补充契约", () => {
     vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "supabase");
     vi.resetModules();
     const real = await import("../lib/data/d");
-    await expect(real.getStoreProfile()).rejects.toMatchObject({
+    await expect(real.getStoreHistory("2026-11-11")).rejects.toMatchObject({
       code: "NOT_IMPLEMENTED",
       message: "未实现",
     });

@@ -345,7 +345,7 @@ C = 顾客 Route Handler（4）；A = 认证（8：7 个由浏览器直接调用
 
 ## 9. 接口详情
 
-所有 Route Handler 错误统一返回 `{"error":{"code","message","details"?}}`，message 是可直接显示的中文；RPC 错误用 `errcode P0001`，message 为错误码、detail 为 JSON，由 `lib/api/errors.ts` 转换。所有顾客端响应带 `Cache-Control: no-store`，Route Handler 声明 `export const dynamic = 'force-dynamic'`。店家 Cookie 会话的 POST（A6、Server Action）校验 Origin、只收 application/json。日志不记录令牌 cookie、备注、Turnstile token；RPC 的 detail 只透传 §10 列出的字段。
+所有 Route Handler 错误统一返回 `{"error":{"code","message","details"?}}`，message 是可直接显示的中文；RPC 错误用 `errcode P0001`，message 为错误码、detail 为 JSON，由 `lib/api/errors.ts` 转换。顾客 quote/orders 只收 application/json；JSON 解析前按字节流限制 16 KiB（包括没有或虚报 Content-Length），超限为 413 `PAYLOAD_TOO_LARGE`（「请求内容超过 16 KB」）。所有顾客端响应带 `Cache-Control: no-store`，Route Handler 声明 `export const dynamic = 'force-dynamic'`。店家 Cookie 会话的 POST（A6、Server Action）校验 Origin、只收 application/json。日志不记录令牌 cookie、备注、Turnstile token；RPC 的 detail 只透传 §10 列出的字段。
 
 ### 公共：二维码令牌、设备与哈希
 
@@ -355,7 +355,7 @@ C = 顾客 Route Handler（4）；A = 认证（8：7 个由浏览器直接调用
 | code 格式 | `v1.` + base64url(store_id 16 字节 ‖ table_id 16 字节 ‖ qr_version uint16) + `.` + base64url(HMAC-SHA256(QR_SIGNING_SECRET, 前两段)[0..16])，约 72 字符 |
 | 验签 | 常量时间比较；失败 → 404 TABLE_INVALID，并计入 IP 的「无效码」限流（20 次 / 10 分钟） |
 | 设备 | 服务端签发 HttpOnly cookie `did`（Secure、SameSite=Strict、Path=/api/t、1 年）：`v1.{16 字节随机 base64url}.{HMAC(DEVICE_COOKIE_SECRET)}`；C1 首次访问时下发，验签失败当作没有；不再接受客户端自报的 X-Device-Id（M3） |
-| IP | 只取 Vercel 平台写入的 `x-vercel-forwarded-for` / `x-real-ip`，不用 `x-forwarded-for` 第一段（M3） |
+| IP | 生产只取 Vercel 平台覆盖的 `x-vercel-forwarded-for`；`x-real-ip` 仅 development/test 可用；仅显式本地 TRUST_LOCAL_IP=1 可取 `x-forwarded-for` 首地址，IPv6 按 /64 分桶、IPv4-mapped 转 IPv4（PR4 L-1） |
 | 指纹哈希 | HMAC-SHA256(CLIENT_HASH_SECRET, store_id + ':' + 值)，每家店不同，不能跨店关联（L6） |
 | request_hash | sha256(规范化 JSON：code 的 table_id + items 按原顺序的 item_id/quantity/unit_price_cents/note) |
 | 账单令牌 | `crypto.randomBytes(32)`（CSPRNG）base64url；只把 sha256 hex 传给 RPC；放在 HttpOnly cookie `bt_{table_id 去横线}`（Secure、SameSite=Strict、Path=/api/t、Max-Age 12 小时），前端读不到也不用存（M4）；令牌绑定设备，作用域 own_orders：只看本设备在这桌下的订单（H1） |
@@ -374,7 +374,7 @@ export const CartBody = z.object({ items: z.array(CartLine).min(1).max(30) })
   .refine(b => b.items.reduce((s, l) => s + l.quantity, 0) <= 200, { message: "总数量不能超过 200" });
 export const PlaceOrderBody = CartBody.and(z.object({
   client_request_id: z.string().uuid(),
-  turnstile_token: z.string().max(2048).optional(),
+  captcha_token: z.string().max(2048).optional(),
 }));
 export type ApiError = { error: { code: ErrorCode; message: string; details?: unknown } };
 ```
@@ -418,10 +418,11 @@ export type ApiError = { error: { code: ErrorCode; message: string; details?: un
 
 1. zod 校验 PlaceOrderBody；读取并验签设备 cookie（没有或无效 → 400 VALIDATION_FAILED，前端先调 C1 拿 cookie）。
 2. 验二维码签名 → TABLE_INVALID。
-3. Upstash 限流（设备 → RATE_LIMITED，带 Retry-After；桌级超 6 次/5 分钟 → 要求 Turnstile，硬拒绝由数据库 table_db 兜底；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；桌级超 6 次/5 分钟、IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 turnstile_token → CAPTCHA_REQUIRED，校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
-4. 用 CSPRNG 生成新令牌明文 T，经 lib/supabase/customer.ts（postgres.js，customer_api 身份）调用 `customer_place_order(…, p_device_hash, p_ip_hash, p_bill_token_hash = sha256(cookie 里的旧令牌), p_new_bill_token_hash = sha256(T), p_captcha_verified)`；哈希必须是 64 位 hex（NULL → VALIDATION_FAILED）。
-5. RPC 内：入参判空 → 锁桌子行、店铺行加 for share（L9）→ 店铺/桌子/营业检查 → 幂等（同 request_id 同内容返回原单 replayed=true，同一设备没收到令牌时重新下发；内容不同 IDEMPOTENCY_KEY_REUSED）→ require_captcha → 拉黑 → 数据库兜底限流（桌 / 设备；同店同 IP 10 分钟 ≥100 单 RATE_LIMITED，≥20 单且未过 Turnstile → CAPTCHA_REQUIRED，details.scope = 'ip_db'）→ validate_cart（ITEM_UNAVAILABLE / PRICE_CHANGED，整单拒绝）→ 上限 → 取或开 open 账单 → 沿用或签发本设备令牌（scope=own_orders）→ 写订单（含 device_seq_in_bill）、order_client_meta 与快照明细。
-6. bill_token_issued=true 时用 Set-Cookie 写入 `bt_{table}`；响应体不含令牌。
+3. 请求先通过独立 orderProbe 硬限流（每设备 30/min、每 IP 60/min，超额硬拒绝 429；限流器异常时必须在任何数据库调用前通过绑定 table_id + client_request_id 的 Turnstile，无 token 返回 CAPTCHA_REQUIRED（scope=probe），验证失败返回 CAPTCHA_FAILED，成功结果在本请求后续 scope 复用、不重复 siteverify），再调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过下单配额与后续 Turnstile 校验；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
+4. Upstash 限流（设备 → RATE_LIMITED，带 Retry-After；桌级超 6 次/5 分钟 → 要求 Turnstile，硬拒绝由数据库 table_db 兜底；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；桌级超 6 次/5 分钟、IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 captcha_token → CAPTCHA_REQUIRED（应用层 details.scope 为 device/table/ip/store），校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
+5. 用 CSPRNG 生成新令牌明文 T，经 lib/supabase/customer.ts（postgres.js，customer_api 身份）调用 `customer_place_order(…, p_device_hash, p_ip_hash, p_bill_token_hash = sha256(cookie 里的旧令牌), p_new_bill_token_hash = sha256(T), p_captcha_verified)`；哈希必须是 64 位 hex（NULL → VALIDATION_FAILED）。
+6. RPC 内：入参判空 → 锁桌子行、店铺行加 for share（L9）→ 店铺/桌子/营业检查 → 幂等（同 request_id 同内容返回原单 replayed=true，同一设备没收到令牌时重新下发；内容不同 IDEMPOTENCY_KEY_REUSED）→ require_captcha → 拉黑 → 数据库兜底限流（桌 / 设备；同店同 IP 10 分钟 ≥100 单 RATE_LIMITED，≥20 单且未过 Turnstile → CAPTCHA_REQUIRED，details.scope = 'ip_db'）→ validate_cart（ITEM_UNAVAILABLE / PRICE_CHANGED，整单拒绝）→ 上限 → 取或开 open 账单 → 沿用或签发本设备令牌（scope=own_orders）→ 写订单（含 device_seq_in_bill）、order_client_meta 与快照明细。
+7. bill_token_issued=true 时用 Set-Cookie 写入 `bt_{table}`；响应体不含令牌。
 
 ```
 请求
@@ -442,7 +443,11 @@ Set-Cookie: bt_<table>=…; HttpOnly; Secure; SameSite=Strict; Path=/api/t; Max-
       DEVICE_BLOCKED 403、CAPTCHA_REQUIRED / CAPTCHA_FAILED 403、RATE_LIMITED 429
 ```
 
+前端 PR-D 验证码约定：为 action=`place_order` 的 widget 设置 `cData = table_id + '_' + client_request_id`（两者用当前二维码 UUID / 本次请求 UUID 的原字符串，重试保持相同）；token 放在 JSON `captcha_token`，不要另信任客户端提供的 cdata。服务端按同一规则比对 siteverify 的 cdata，并发送 `idempotency_key=client_request_id`，严格核对 success===true、action 和站点 hostname。只有精确等于 Cloudflare 官方 always-pass 测试 secret `1x0000000000000000000000000000000AA` 时豁免 cdata；不以 NODE_ENV、站点域名或任意配置开关豁免。此 key 的 dummy 响应可能不带 cdata；action/hostname 校验仍保留，测试 mock fetch，不调用 Cloudflare。生产须使用正式 key。
+
 ### C4 GET /api/t/[code]/bill（顾客进度轮询）
+
+0008 判定顺序：入参必填 → 同店未删除桌子的当前版本 → resolve_table(当前版本, bill)，店停用优先 403 → 比对页面版本。旧码没有本人令牌（包括格式错误、其他店/桌/设备）统一 404 TABLE_INVALID；当前码非本人令牌为 401。本人令牌先判 revoked_at（最早的 bill_paid/qr_rotated），再判 expires_at（expired），均为 410 BILL_TOKEN_EXPIRED；只有未撤销未过期时才继续检查旧码（404，不撤销令牌、不清 cookie）。最后才更新 last_used_at 并返回 bill。所有 410 清 bt cookie，且不增加 invalidIp。前端 PR-D 将 reason=qr_rotated 显示为「二维码已更新，请重新扫码」；404 不清 cookie。函数保留 SECURITY DEFINER、search_path=''、statement_timeout=3s 和 customer_api 独占 EXECUTE。
 
 没有令牌 cookie：只返回 `table_in_use`（这桌有没有在用的账单，布尔值，L7），不返回内容。有令牌：令牌必须属于本店、本桌、本设备，未撤销、未过期；scope=own_orders 时只返回本设备在这张账单下的订单，金额是这些订单的估算（amounts_basis=own_orders），看不到同桌其他设备的订单（H1）。顾客能看到 cancel_reason，看不到 cancel_note。限流：令牌 12 次/分钟、IP 120 次/分钟。
 
@@ -551,19 +556,25 @@ Supabase Auth 设置（PR1b 修改 supabase/config.toml；生产项目只在 Das
 | M5/M6 | insert / update 列级授权内字段 | STORE_SUSPENDED；23514 → VALIDATION_FAILED |
 | M7 | dining_tables insert / update（label、is_active、sort_order）；重置二维码走 R12 rotate_table_qr | 23505 `dining_tables_store_label_uq` → TABLE_LABEL_TAKEN |
 | M8 | `storage.from('menu-images').upload(path, blob, { contentType: 'image/webp', upsert: false })` | FILE_TOO_LARGE、UNSUPPORTED_FILE_TYPE |
-| M9 | `from('orders').select('*, order_items(*), dining_tables(label)').in('status', ['new','accepted'])`；补拉 `.gt('updated_at', since)` | since = 上次最大 updated_at − 30 秒，按 id 去重 |
+| M9 | `from('orders').select('id,store_id,table_id,bill_id,seq_in_bill,device_seq_in_bill,status,subtotal_cents,item_count,created_at,accepted_at,served_at,cancelled_at,updated_at,cancel_reason,cancel_note,order_items(item_name,unit_price_cents,quantity,line_total_cents,note),dining_tables(label)').in('status', ['new','accepted'])`；补拉 `.gt('updated_at', since)` | 限定本店 store_id，按 created_at、id 排序；补拉包含终态。since = 上次最大 updated_at − 30 秒，按 id 去重 |
 | M10 | `channel('store:'+id, { config: { private: true } }).on('postgres_changes', { schema:'public', table:'orders', filter:'store_id=eq.'+id }, …)`，bills 同理 | 见 §11 |
-| M11 | `from('bill_overview').select('*', { count:'exact' })`，筛选 status、table_id、paid_at 区间；`.range(from, to)` 每页 20 | 日期区间用 `2026-11-04T00:00:00+08:00` 格式 |
-| M12 | bill_overview 单条 + orders + order_items |  |
+| M11 | `from('bill_overview').select('id,store_id,table_id,table_label,status,opened_at,paid_at,updated_at,subtotal_cents,service_charge_bp,service_charge_cents,sst_bp,sst_cents,rounding_cents,total_cents,is_estimate,order_count,unserved_count,currency', { count:'exact' })`，筛选 status、table_id、paid_at 区间；`.range(from, to)` 每页 20 | BillFilters.page 从 1 开始，20/页，返回 BillPage；paid_from/paid_to 为 YYYY-MM-DD，末日包含，转换为 UTC+8 半开区间；opened_at 倒序、id 稳定排序 |
+| M12 | bill_overview 单条使用 M11 显式列 + orders 使用 M9 显式列，限定本店与账单，按 seq_in_bill、id 排序 | getBillDetail → BillDetail {bill,orders}；金额和 is_estimate 直接取视图，设备序号用 device_seq_in_bill |
 | M13 | orders 按 created_at 的马来西亚日区间；P5「已上菜」按 served_at 查，见 §21 第 3 问 |  |
 | M14 | `rpc('list_blocked_clients', { p_include_expired: false })` → `[{ id, kind, reason, created_at, expires_at, is_active, source_order: { id, seq_in_bill, table_label, subtotal_cents, created_at } \| null }]`，最多 200 条，不含哈希；source_order 已带桌名和「第几单」，前端不用再查 orders（v0.6 第 10 问）；解除走 R13（不要直接 delete blocked_clients，0004 已收回 delete 权限） | FORBIDDEN（不是店铺成员）；停用的店也能看 |
+
+PR4 数据入口：订单 `lib/data/live.ts` / `supabase/live-orders.ts`；账单 `lib/data/bills.ts` / `{mock,supabase}/bills.ts`；完整店铺与桌号通过 `lib/data/store.ts`、`lib/data/tables.ts` 导出。M2 的实时营业状态入口只读 `name,status,is_accepting_orders`，setAcceptingOrders 只写 is_accepting_orders；完整资料仍用 getStore/updateStore。
+
+`useStoreChannel(storeId)` 返回 orders、connection、error、soundEnabled、enableSound、refresh；重连、页面恢复、每 60 秒补拉，保留终态并拒绝旧版本覆盖。enableSound 由用户点击触发，存在 new 单每 10 秒响铃。P5 在 LiveProvider 和新 hook 中择一，避免重复订阅/响铃。bills 事件只触发订单刷新，P6 金额需通过 listBills/getBillDetail 重读视图。
+
+顾客数据层线上字段为 `captcha_token`，PlaceOrderBody 兼容 `turnstile_token` 别名并转换（两者都有时别名优先）；菜单 `table.id` 提供 cData 所需 table_id。customer-fetch 保留服务端 code/message/details、status 和 Retry-After 秒数，包括 413 PAYLOAD_TOO_LARGE、CAPTCHA_REQUIRED.scope、410 reason 和「本店暂停服务」。类型 DataErrorCode 在原 ErrorCode 外扩展账单冲突与 PAYLOAD_TOO_LARGE，原错误码联合保持冻结。
 
 ### R1–R14 RPC
 
 | RPC | 参数 | 返回 | 错误 |
 | --- | --- | --- | --- |
-| update_order_status | p_order_id, p_to, p_expected, p_cancel_reason?, p_cancel_note? | 订单行 | NOT_FOUND、STORE_SUSPENDED、ORDER_STATUS_CONFLICT（details.current_status）、INVALID_STATUS_TRANSITION、ORDER_BILL_CLOSED、VALIDATION_FAILED |
-| mark_bill_paid | p_bill_id, p_expected_total_cents（店家确认时看到的合计） | 冻结后的账单金额 + tokens_revoked（结账即清台：撤销该账单全部顾客令牌） | BILL_TOTAL_CHANGED（details 为最新金额）、BILL_ALREADY_PAID、NOT_FOUND、STORE_SUSPENDED、VALIDATION_FAILED |
+| update_order_status | p_order_id, p_to, p_expected, p_cancel_reason?, p_cancel_note? | RPC 返回订单行；数据层随后按本店重查 M9 完整关联订单；取消原因四选一必填、说明最多 100 个 Unicode 码点 | NOT_FOUND、STORE_SUSPENDED、ORDER_STATUS_CONFLICT（details.current_status）、INVALID_STATUS_TRANSITION、ORDER_BILL_CLOSED、VALIDATION_FAILED |
+| mark_bill_paid | p_bill_id, p_expected_total_cents（店家确认时看到的合计） | CheckoutResult：冻结金额、service_charge_bp/sst_bp、is_estimate=false、paid_at、table_id、tokens_revoked（结账即清台：撤销该账单全部顾客令牌） | BILL_TOTAL_CHANGED（details 为最新金额）、BILL_ALREADY_PAID、NOT_FOUND、STORE_SUSPENDED、VALIDATION_FAILED |
 | reorder_categories | p_ids uuid[]（≤50） | void | VALIDATION_FAILED、NOT_FOUND、STORE_SUSPENDED |
 | reorder_items | p_category_id, p_ids uuid[]（≤500） | void | 同上 |
 | soft_delete_item | p_item_id | void | NOT_FOUND、STORE_SUSPENDED |
@@ -635,6 +646,8 @@ get_store_daily_stats('2026-11-04') →
 
 认证类错误码由前端 lib/auth/gotrue-errors.ts 从 GoTrue 的 error code 映射（§19）。顾客 RPC 经 postgres.js 调用，错误映射与 PostgREST 相同；另外 57014（statement_timeout 3 秒）和连接失败 → INTERNAL 并告警，前端用同一 client_request_id 重试即可（幂等）。PostgREST 映射：P0001 → message 即错误码；42501 → FORBIDDEN；23505 → 按约束名映射（dining_tables_store_label_uq → TABLE_LABEL_TAKEN），否则 CONFLICT；23514 → VALIDATION_FAILED；其他 → INTERNAL。RPC 的 detail 只透传本表列出的字段，其余丢弃。
 
+顾客错误补充：413 PAYLOAD_TOO_LARGE 表示请求体超过 16 KiB；STORE_SUSPENDED 在顾客路由显示「本店暂停服务」，共享错误表保留店家「店铺已被平台停用，请联系平台」。429 Retry-After 取数据库 retry_after_seconds 或应用限流窗口秒数，向上取整且至少 1，无有效数值默认 60 秒；数据库 detail 只新增白名单 retry_after_seconds。
+
 ## 11. 实时推送与轮询
 
 | 方案 | 优点 | 缺点 | 结论 |
@@ -647,6 +660,10 @@ get_store_daily_stats('2026-11-04') →
 - 顾客端不用 Realtime，改为约 10 秒轮询 C4：顾客没有登录身份，Realtime 的 RLS 无法授权给匿名令牌；轮询可以走同一套限流和 no-store；页面进入后台（visibilitychange hidden）停止，回到前台立即拉一次；收到 410（结账、重置桌码、过期）时停止轮询并提示，令牌 cookie 由服务端清除。
 
 ## 12. 防刷单
+
+PR4 L-1：生产只支持 Vercel，信任由平台覆盖的 x-vercel-forwarded-for；生产忽略 x-real-ip，本地开发/测试才允许读取。无可信头或格式错误使用同店共享 unknown 桶，不能退回客户端 XFF；上线监控统计 unknown 比例并报警。IPv6 规范化后按 /64 分桶，IPv4-mapped（含十六进制写法）先转普通 IPv4。应用与数据库使用同一归一化 IP 的按店 HMAC，原始 IP 不入库。
+
+PR4 L-4：函数级 statement_timeout 已覆盖，连接参数经 Supavisor 可能被拒，已删除。保留角色级与四个 customer_* 函数级 3 秒超时。
 
 | 措施 | 做法 | 防的风险 |
 | --- | --- | --- |
@@ -742,7 +759,7 @@ get_store_daily_stats('2026-11-04') →
 | PR1 数据库 | 0001、0002 迁移（v7，含安全审查修订与验证后建店）；测试脚本（117 条）+ pgTAP；config.toml（Auth CAPTCHA、关闭匿名登录、邮箱与手机验证、Twilio Verify、短信频率与测试号码）；类型生成 `supabase gen types` | 无 |
 | PR1b 安全复查迁移（v8 新增） | 0003 迁移；0004（更新 8：H-1、M-3、L-1、L-8、前端问题、MFA_REQUIRED、L-5）；测试 rereview 64、rereview2 19、frontend_alignment 88、runbook_suspend 27 + stub；pgTAP auth_roles 23；config.toml 的 Auth 段改为 v8（注册不收密码、hook、8 位 15 分钟邮件码、5 个邮件模板、限流数字、Secure password change、密码规则、Redirect URLs）；旧测试 5 处预期以补丁提供；psql 的 password 命令设置 customer_api 密码；运维手册；Twilio 与 Supabase Dashboard 设置截图（docs/launch-checklist-twilio.md） | 开工：PR1 合并 |
 | PR2 认证与店家后台基础 | 认证封装（浏览器直连 Supabase Auth 的 A1–A5、A7、A8 的错误映射；A6 set-password Route Handler；lib/auth/guard.ts 判定，前端 middleware 负责跳转；safeNext、gotrue-errors、phone 校验；§19、§21）、M1–M8、R3–R7、R12、R13、R14、lib/api/errors.ts、lib/data/supabase/ 的店家数据层（页面全部在前端 PR） | 开工：PR1b 合并 + 前端 PR-A 合并（lib/data/types.ts）+ 前端 PR-C 合并（guard / safe-next 纯函数版）+ M-1 / M-2 / L-3 / L-7 写进文档（已完成） |
-| PR3 顾客点餐 | lib/qr.ts、lib/ratelimit.ts（IP 两档，M-N3）、lib/client-context.ts、lib/supabase/customer.ts（postgres.js + CUSTOMER_API_DATABASE_URL）、C1–C4、S1（二维码链接）；L-9（customer_* 函数级 statement_timeout、连接参数固定超时）；L-11 书面接受 | 开工：PR1b 合并 + 前端 PR-A 合并（与 PR2 可并行） |
+| PR3 顾客点餐 | lib/qr.ts、lib/ratelimit.ts（IP 两档，M-N3）、lib/client-context.ts、lib/supabase/customer.ts（postgres.js + CUSTOMER_API_DATABASE_URL）、C1–C4、S1（二维码链接）；L-9（函数级 statement_timeout 已覆盖，连接参数经 Supavisor 可能被拒，已删除）；L-11 书面接受 | 开工：PR1b 合并 + 前端 PR-A 合并（与 PR2 可并行） |
 | PR4 店家实时订单与结账 | M9–M12、R1、R2、Realtime 私有频道、提示音、补拉；订单卡显示「设备 #n」 | 开工：PR2、PR3 合并 |
 | PR5 记录、统计、平台与防刷收尾 | M13、M14、R8–R11、Turnstile、监控汇总；管理员 aal2 联调（/admin/mfa 页面在前端）、create-admin.ts；CI 检查生产无测试号码；短信异常告警 | 开工：PR4 合并；上线前验收（M-4、23 项真实环境确认）在 PR5 与前端全部页面合并后 |
 
@@ -1214,3 +1231,8 @@ export interface QuoteEstimate {
 | 低-5 | Twilio 每号 5 次上限（60203）映射为 RATE_LIMITED，前端「请稍后再试」 | lib/auth/gotrue-errors.ts（PR2）；真实返回码随清单第 10 项实测 | 待 PR2 |
 | 低-6 | pgTAP 补 value_hash 列权限、不能直接 delete 拉黑，plan(25) | auth_roles.test.sql | 已完成（需 supabase start 实跑） |
 | 信息 1–5 | 不阻塞；信息-4 跳转统一写 new URL(safeNext(next), SITE)，在 PR2 / 前端顺手处理 | — | 记录 |
+
+本地运行：`isNonLocalEnv()` 统一定义为 NODE_ENV=production 或 VERCEL_ENV 去空格非空（包括 preview/development）。instrumentation.register 在服务就绪前拒绝非本地环境设置任何 TRUST_LOCAL_IP 或 CUSTOMER_DB_SSL=disable；CI 未设置这两个开关，构建不受影响。
+SSL 默认 require，仅本地显式 disable 且 URL.hostname 严格等于 localhost / 127.0.0.1 可关闭；不接受 ::1 或主机前后缀。postgres URL 的 LOCALHOST 保留大小写，因此也维持 require。
+只有 VERCEL=1 信任 x-vercel-forwarded-for；否则非本地一律 unknown。本地 TRUST_LOCAL_IP=1 取 XFF 首地址再取 x-real-ip；未启用时保留 development/test 的 x-real-ip 支持。非法平台头不回退，unknown 共桶需监控。
+Realtime bills 事件按本店 bill_id 刷新；无 id 事件按订阅水位减 30 秒增量补拉，只派发 new/accepted 或 Asia/Kuala_Lumpur 当天创建的订单，避免历史终态订单灌入列表。

@@ -17,6 +17,7 @@ import {
   saveStoreProfile,
   getStoreHistory,
   getSession,
+  onSessionChange,
   type Store,
   type StoreBillDetail,
   type DiningTable,
@@ -40,6 +41,7 @@ import {
   adjacentDay,
   validHistoryDate,
 } from "./store-d-helpers";
+import { routes } from "../routes";
 import { useRouter } from "next/navigation";
 import { formatMoney, formatTime } from "../format";
 import {
@@ -83,12 +85,39 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
   const [loading, setLoading] = useState(true);
   const [suspended, setSuspended] = useState(false);
   const serial = useRef(0);
+  const accessVersion = useRef(0);
+  const accessKey = useRef("");
+  useEffect(() => {
+    const version = accessVersion;
+    let active = true;
+    const unsubscribe = onSessionChange((s) => {
+      if (!active) return;
+      const key = JSON.stringify([s?.user_id, s?.store?.id, s?.store?.status]);
+      if (key !== accessKey.current) {
+        accessKey.current = key;
+        accessVersion.current++;
+        serial.current++;
+        setLoading(false);
+        setSuspended(s?.store?.status === "suspended");
+      }
+    });
+    return () => {
+      active = false;
+      version.current++;
+      unsubscribe();
+    };
+  }, []);
   const load = useCallback(() => {
     const id = ++serial.current;
     setLoading(true);
     void Promise.all([fetcher(), getSession()])
       .then(([v, s]) => {
         if (id !== serial.current) return;
+        accessKey.current = JSON.stringify([
+          s?.user_id,
+          s?.store?.id,
+          s?.store?.status,
+        ]);
         setValue(v);
         setSuspended(s?.store?.status === "suspended");
         setError(undefined);
@@ -115,7 +144,7 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
       window.removeEventListener("storage", load);
     };
   }, [load]);
-  return { value, error, loading, suspended, load };
+  return { value, error, loading, suspended, load, accessVersion };
 }
 function OrderCardD({ order }: { order: LiveOrder }) {
   return (
@@ -194,29 +223,35 @@ export function BillsPageD() {
   }, [busy]);
   async function open(id: string) {
     const n = ++selection.current;
+    const access = r.accessVersion.current;
     setDetailLoading(true);
     setNotice("");
     setDetail(undefined);
     setError(undefined);
     try {
       const v = await getStoreBill(id);
-      if (selection.current === n) setDetail(v);
+      if (selection.current === n && access === r.accessVersion.current)
+        setDetail(v);
     } catch (e) {
-      if (selection.current === n) setError(e);
+      if (selection.current === n && access === r.accessVersion.current)
+        setError(e);
     } finally {
       if (selection.current === n) setDetailLoading(false);
     }
   }
   async function pay() {
-    if (!detail || busy) return;
+    if (!detail || busy || r.suspended) return;
+    const access = r.accessVersion.current;
     setBusy(true);
     try {
       await markBillPaid(detail.id, detail.total_cents);
+      if (access !== r.accessVersion.current) return;
       setConfirm(false);
       setDetail(undefined);
       setNotice("已标记付款，这桌已清桌");
       r.load();
     } catch (e) {
+      if (access !== r.accessVersion.current) return;
       const failure = paymentFailure(e);
       setNotice(failure.message);
       setError(undefined);
@@ -225,9 +260,24 @@ export function BillsPageD() {
         setDetail(undefined);
         selection.current++;
         r.load();
-      } else if (failure.total !== undefined) {
-        setDetail({ ...detail, total_cents: failure.total });
-        setConfirm(true);
+      } else if (
+        e instanceof DataError &&
+        String(e.code) === "BILL_TOTAL_CHANGED"
+      ) {
+        try {
+          const refreshed = await getStoreBill(detail.id);
+          if (access !== r.accessVersion.current) return;
+          setDetail(refreshed);
+          setNotice(
+            `这桌金额已变化，新的总计是 ${formatMoney(refreshed.total_cents)}，请再确认`,
+          );
+          setConfirm(true);
+        } catch {
+          if (access !== r.accessVersion.current) return;
+          setNotice("");
+          setError(new Error("refresh failed"));
+          setConfirm(false);
+        }
       }
     } finally {
       setBusy(false);
@@ -286,7 +336,11 @@ export function BillsPageD() {
           </label>
         )}
       </div>
-      {notice && <Banner tone="green">{notice}</Banner>}
+      {notice && (
+        <Banner tone={notice === "这桌已经结账" ? "yellow" : "green"}>
+          {notice}
+        </Banner>
+      )}
       {!!error && <Banner tone="red">{storePageMessage(error)}</Banner>}
       {r.error ? (
         <ErrorState message={storePageMessage(r.error)} retry={r.load} />
@@ -308,7 +362,7 @@ export function BillsPageD() {
                     <h2>{b.table_label} 桌</h2>
                     <p>{formatTime(b.paid_at ?? b.opened_at)}</p>
                     <p>
-                      {b.order_count ?? 0} 单 ·{" "}
+                      {b.order_count !== undefined && `${b.order_count} 单 · `}
                       {b.status === "open" ? "未付款" : "已付款"}
                     </p>
                     {!!b.unserved_count && (
@@ -347,6 +401,9 @@ export function BillsPageD() {
           </>
         )
       )}
+      {!detail && !detailLoading && (
+        <div className="d-bill-placeholder">选择左侧账单查看详情</div>
+      )}
       {detailLoading && (
         <BillDetailD title="账单详情" onClose={close}>
           <Skeleton />
@@ -380,7 +437,7 @@ export function BillsPageD() {
           )}
         </BillDetailD>
       )}
-      {detail && confirm && (
+      {detail && confirm && !r.suspended && (
         <ConfirmDialog
           title={`确认 ${detail.table_label} 桌已付款 ${formatMoney(detail.total_cents)}？`}
           confirmText="确认已付款"
@@ -425,28 +482,32 @@ export function TablesPageD() {
   }, [busy]);
   const closeLinks = useCallback(() => setLinks(undefined), []);
   async function mutate(fn: () => Promise<unknown>, success: string) {
-    if (busy) return;
+    if (busy || r.suspended) return;
+    const access = r.accessVersion.current;
     setBusy(true);
     setError(undefined);
     try {
       await fn();
+      if (access !== r.accessVersion.current) return;
       setEdit(undefined);
       setPending(undefined);
       setNotice(success);
       r.load();
     } catch (e) {
-      setError(e);
+      if (access === r.accessVersion.current) setError(e);
     } finally {
       setBusy(false);
     }
   }
   async function qr(ids: string[]) {
+    const access = r.accessVersion.current;
     setBusy(true);
     setError(undefined);
     try {
-      setLinks(await getStoreTableQrLinks(ids));
+      const links = await getStoreTableQrLinks(ids);
+      if (access === r.accessVersion.current) setLinks(links);
     } catch (e) {
-      setError(e);
+      if (access === r.accessVersion.current) setError(e);
     } finally {
       setBusy(false);
     }
@@ -603,19 +664,23 @@ export function TablesPageD() {
               );
             }}
           >
-            <TextField
-              label="桌号"
-              value={edit.label}
-              maxLength={20}
-              onChange={(label) => setEdit({ ...edit, label })}
-            />
-            <Button type="submit" busy={busy} disabled={!edit.label.trim()}>
-              保存
-            </Button>
+            <fieldset disabled={busy || r.suspended}>
+              <TextField
+                label="桌号"
+                value={edit.label}
+                maxLength={20}
+                onChange={(label) => setEdit({ ...edit, label })}
+              />
+              {!r.suspended && (
+                <Button type="submit" busy={busy} disabled={!edit.label.trim()}>
+                  保存
+                </Button>
+              )}
+            </fieldset>
           </form>
         </Modal>
       )}
-      {pending && (
+      {pending && !r.suspended && (
         <ConfirmDialog
           title={
             pending.kind === "delete"
@@ -637,8 +702,11 @@ export function TablesPageD() {
                 else if (kind === "disable")
                   await setStoreTableActive(table.id, false);
                 else {
+                  const access = r.accessVersion.current;
                   await rotateStoreTableQr(table.id);
-                  setLinks(await getStoreTableQrLinks([table.id]));
+                  if (access !== r.accessVersion.current) return;
+                  const links = await getStoreTableQrLinks([table.id]);
+                  if (access === r.accessVersion.current) setLinks(links);
                 }
               },
               kind === "delete"
@@ -737,7 +805,8 @@ export function SettingsPageD() {
     setNotice("");
   }
   async function save() {
-    if (busy || !draft) return;
+    if (busy || !draft || r.suspended) return;
+    const access = r.accessVersion.current;
     const errors: Record<string, string> = {};
     const service = percentToBp(rates.service_charge_bp, 20),
       sst = percentToBp(rates.sst_bp, 10);
@@ -761,12 +830,32 @@ export function SettingsPageD() {
         service_charge_bp: service,
         sst_bp: sst,
       });
+      if (access !== r.accessVersion.current) return;
       const p = patchOf(result);
       setDraft(p);
       setSaved(JSON.stringify(p));
       setNotice("已保存");
     } catch (e) {
-      setError(e);
+      if (access === r.accessVersion.current) setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function saveAccepting(is_accepting_orders: boolean) {
+    if (busy || r.suspended || !draft) return;
+    const access = r.accessVersion.current;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await saveStoreProfile({ is_accepting_orders });
+      if (access !== r.accessVersion.current) return;
+      setDraft((current) => ({ ...current, is_accepting_orders }));
+      setSaved((current) =>
+        JSON.stringify({ ...JSON.parse(current), is_accepting_orders }),
+      );
+      setNotice("营业状态已保存");
+    } catch (e) {
+      if (access === r.accessVersion.current) setError(e);
     } finally {
       setBusy(false);
     }
@@ -841,7 +930,7 @@ export function SettingsPageD() {
               onChange={(is_accepting_orders) => {
                 if (needsClosingConfirmation(is_accepting_orders))
                   setPause(true);
-                else change({ is_accepting_orders });
+                else void saveAccepting(is_accepting_orders);
               }}
             >
               接受下单
@@ -896,20 +985,20 @@ export function SettingsPageD() {
         onClick={() =>
           unsaved.request(() => {
             void signOut()
-              .then(() => router.replace("/login"))
+              .then(() => router.replace(routes.login))
               .catch(setError);
           })
         }
       >
         退出登录
       </Button>
-      {pause && (
+      {pause && !r.suspended && (
         <ConfirmDialog
           title={pauseMessage}
           backText="取消"
           onClose={closePause}
           onConfirm={() => {
-            change({ is_accepting_orders: false });
+            void saveAccepting(false);
             setPause(false);
           }}
         />
@@ -974,7 +1063,7 @@ export function HistoryPageD() {
         </Button>
       </div>
       {r.error ? (
-        <ErrorState message="记录加载失败，请重试" retry={r.load} />
+        <ErrorState message={storePageMessage(r.error)} retry={r.load} />
       ) : r.loading ? (
         <Skeleton />
       ) : (

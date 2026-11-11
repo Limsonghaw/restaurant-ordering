@@ -6,7 +6,7 @@ import {
   type StoreProfilePatch,
   type StoreBillRow,
   type StoreBillDetail,
-  type BillPage,
+  type StoreBillPage,
   type DiningTable,
   type TableQrLink,
   type StoreHistory,
@@ -83,6 +83,9 @@ function overview(
     .filter((o) => o.status !== "cancelled")
     .reduce((sum, o) => sum + o.subtotal_cents, 0);
   return {
+    store_id: store.id,
+    updated_at: b.opened_at,
+    currency: "MYR",
     id: b.id,
     table_id: b.table_id,
     table_label: s.tables.find((t) => t.id === b.table_id)!.label,
@@ -122,7 +125,7 @@ export async function listStoreBills(
   status: "open" | "paid",
   page = 1,
   filters: StoreBillFilters = {},
-): Promise<BillPage> {
+): Promise<StoreBillPage> {
   const { s, store, m } = await context();
   if (!Number.isInteger(page) || page < 1 || !["open", "paid"].includes(status))
     fail("VALIDATION_FAILED", "分页参数不正确");
@@ -164,7 +167,10 @@ export async function getStoreBill(id: string): Promise<StoreBillDetail> {
   return { ...overview(s, store, m, b), orders: orders(s, store, b) };
 }
 // R2: compare current total, freeze amounts and revoke all bill tokens.
-export async function markBillPaid(id: string, expected_total_cents: number) {
+export async function checkoutMockBill(
+  id: string,
+  expected_total_cents: number,
+) {
   const { s, store, m } = await context(true);
   const b = bill(s, store.id, id);
   if (!Number.isInteger(expected_total_cents) || expected_total_cents < 0)
@@ -355,8 +361,9 @@ export async function saveStoreProfile(
   persist(s, m);
   return next;
 }
-const day = (iso: string) =>
-  new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 10);
+function day(iso: string) {
+  return new Date(Date.parse(iso) + 8 * 3600000).toISOString().slice(0, 10);
+}
 export async function getStoreHistory(date: string): Promise<StoreHistory> {
   const { s, store, m } = await context();
   if (

@@ -12,7 +12,10 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "supabase");
   vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "placeholder-site-key");
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe("M-1 数据源必须显式选择", () => {
   it.each([undefined, "", "SUPABASE", "typo", " supabase", "supabase "])(
@@ -35,8 +38,14 @@ describe("M-1 数据源必须显式选择", () => {
     vi.resetModules();
     const data = await import("../lib/data");
     expect(data.isMock).toBe(false);
-    await expect(data.getTableMenu("demo-a1")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
+    const menu = { table: { id: "table-id", label: "A1" } };
+    const fetch = vi.fn().mockResolvedValue(Response.json(menu));
+    vi.stubGlobal("fetch", fetch);
+    await expect(data.getTableMenu("demo-a1")).resolves.toEqual(menu);
+    expect(fetch).toHaveBeenCalledWith("/api/t/demo-a1/menu", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
     });
   });
 });

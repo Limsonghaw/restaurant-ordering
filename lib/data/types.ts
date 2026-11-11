@@ -359,23 +359,82 @@ export type StoreProfilePatch = Partial<Pick<Store,
   "name" | "logo_path" | "address" | "opening_hours" | "is_accepting_orders" | "service_charge_bp" | "sst_bp"
 >>;
 
-// PR-D: M2/M3/M7/M11–M13, R2/R7/R8/R12, S1. Existing types remain unchanged.
-export type StorePageErrorCode =
-  MerchantErrorCode | "BILL_TOTAL_CHANGED" | "BILL_ALREADY_PAID";
-export interface StoreBillRow extends BillAmounts {
+export type Pr4ErrorCode =
+  | "ORDER_STATUS_CONFLICT"
+  | "INVALID_STATUS_TRANSITION"
+  | "BILL_TOTAL_CHANGED"
+  | "BILL_ALREADY_PAID";
+export interface BillListRow extends BillAmounts {
   id: string;
+  store_id: string;
   table_id: string;
   table_label: string;
   status: "open" | "paid";
   opened_at: string;
   paid_at: string | null;
+  updated_at: string;
   service_charge_bp: number;
   sst_bp: number;
+  is_estimate: boolean;
+  order_count: number;
+  unserved_count: number;
+  currency: "MYR";
 }
+export interface BillFilters {
+  page?: number;
+  status?: "open" | "paid";
+  table_id?: string;
+  paid_from?: string;
+  paid_to?: string;
+}
+export interface BillPage {
+  bills: BillListRow[];
+  total: number;
+  page: number;
+  page_size: 20;
+}
+export interface BillDetail {
+  bill: BillListRow;
+  orders: LiveOrder[];
+}
+export interface CheckoutResult extends BillAmounts {
+  id: string;
+  status: "paid";
+  paid_at: string;
+  table_id: string;
+  tokens_revoked: number;
+}
+export interface PlaceOrderBody {
+  turnstile_token?: string;
+}
+
+// New merchant errors remain append-only alongside the original ErrorCode union.
+export type DataErrorCode =
+  ErrorCode | MerchantErrorCode | Pr4ErrorCode | CustomerErrorCode;
+export interface CheckoutResult {
+  service_charge_bp: number;
+  sst_bp: number;
+  is_estimate: false;
+}
+
+// PR4 customer API extension; original ErrorCode stays frozen.
+export type CustomerErrorCode = "PAYLOAD_TOO_LARGE";
+
+// PR-D: M2/M3/M7/M11–M13, R2/R7/R8/R12, S1. Existing types remain unchanged.
+export type StorePageErrorCode =
+  MerchantErrorCode | "BILL_TOTAL_CHANGED" | "BILL_ALREADY_PAID";
+export type StoreBillRow = Omit<
+  BillListRow,
+  "order_count" | "unserved_count" | "is_estimate"
+> & {
+  order_count?: number;
+  unserved_count?: number;
+  is_estimate?: boolean;
+};
 export interface StoreBillDetail extends StoreBillRow {
   orders: LiveOrder[];
 }
-export interface BillPage {
+export interface StoreBillPage {
   bills: StoreBillRow[];
   total: number;
   page: number;
@@ -401,11 +460,7 @@ export interface StoreHistory {
 }
 export type StoreMockActionD = "empty" | "many_bills" | "restore";
 
-export interface StoreBillFilters { table_id?: string; paid_date?: string }
-
-// PR-D bill_overview metadata (append only; older paid snapshots may omit it).
-export interface StoreBillRow {
-  order_count?: number;
-  unserved_count?: number;
-  is_estimate?: boolean;
+export interface StoreBillFilters {
+  table_id?: string;
+  paid_date?: string;
 }

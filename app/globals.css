@@ -920,3 +920,6 @@ label:has(.upload-input):focus-within {
  .d-responsive-table tr { border: 1px solid var(--border, #ddd); border-radius: 12px; margin: 12px 0; padding: 12px; }
  .d-responsive-table td { border: 0; padding: 4px 0; }
 }
+
+.d-bill-placeholder { display: none; }
+@media (min-width: 820px) { .d-bills > .d-bill-placeholder { display: block; grid-column: 2; grid-row: 2 / span 8; padding: 24px; color: var(--muted); } }

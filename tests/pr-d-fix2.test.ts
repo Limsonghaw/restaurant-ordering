@@ -183,3 +183,116 @@ it("switching mock accounts to another store remounts tables and clears old QR p
   expect(find(tree, (e) => e.type === QrPrintD)).toHaveLength(0);
   expect(JSON.stringify(tree)).not.toContain("A1");
 });
+it("suspension keeps the settings draft and ignores a save issued before suspension", async () => {
+  const { SettingsPageD } = await import("../lib/ui/store-d");
+  vi.stubGlobal("document", new EventTarget());
+  const slots: unknown[] = [];
+  const callbacks: ((s: Awaited<ReturnType<typeof d.getSession>>) => void)[] =
+    [];
+  const subscribe = vi
+    .spyOn(d, "onSessionChange")
+    .mockImplementation((callback) => {
+      callbacks.push(callback);
+      return () => {};
+    });
+  let resolveSave!: (s: Awaited<ReturnType<typeof d.getStoreProfile>>) => void;
+  const save = vi.spyOn(d, "saveStoreProfile").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const renderSettings = () => run(SettingsPageD, slots);
+  try {
+    for (let i = 0; i < 5; i++) {
+      tree = renderSettings();
+      await vi.runAllTimersAsync();
+    }
+    tree = renderSettings();
+    const input = find(tree, (e) => e.props.label === "店名")[0];
+    (input.props.onChange as (value: string) => void)("尚未保存的草稿");
+    tree = renderSettings();
+    const form = find(tree, (e) => e.type === "form")[0];
+    (form.props.onSubmit as (e: { preventDefault: () => void }) => void)({
+      preventDefault() {},
+    });
+    const pending = d.getSession();
+    await vi.runAllTimersAsync();
+    const session = (await pending)!;
+    callbacks.forEach((cb) =>
+      cb({ ...session, store: { ...session.store!, status: "suspended" } }),
+    );
+    tree = renderSettings();
+    expect(find(tree, (e) => e.type === "fieldset")[0].props.disabled).toBe(
+      true,
+    );
+    const profile = d.getStoreProfile();
+    await vi.runAllTimersAsync();
+    resolveSave({ ...(await profile), name: "晚到的旧保存结果" });
+    await Promise.resolve();
+    tree = renderSettings();
+    expect(find(tree, (e) => e.props.label === "店名")[0].props.value).toBe(
+      "尚未保存的草稿",
+    );
+    expect(JSON.stringify(tree)).not.toContain("晚到的旧保存结果");
+  } finally {
+    subscribe.mockRestore();
+    save.mockRestore();
+  }
+});
+it("business toggle saves only its own field immediately and keeps other drafts", async () => {
+  vi.stubGlobal("document", new EventTarget());
+  const { SettingsPageD } = await import("../lib/ui/store-d");
+  const slots: unknown[] = [];
+  const profileRead = d.getStoreProfile();
+  await vi.runAllTimersAsync();
+  const profile = await profileRead;
+  const save = vi
+    .spyOn(d, "saveStoreProfile")
+    .mockResolvedValue({ ...profile, is_accepting_orders: false });
+  const renderSettings = () => run(SettingsPageD, slots);
+  try {
+    for (let i = 0; i < 5; i++) {
+      tree = renderSettings();
+      await vi.runAllTimersAsync();
+    }
+    tree = renderSettings();
+    (
+      find(tree, (e) => e.props.label === "店名")[0].props.onChange as (
+        value: string,
+      ) => void
+    )("未保存的名字");
+    tree = renderSettings();
+    (
+      find(tree, (e) => e.props.children === "接受下单")[0].props.onChange as (
+        value: boolean,
+      ) => void
+    )(false);
+    tree = renderSettings();
+    expect(save).not.toHaveBeenCalled();
+    const confirm = find(
+      tree,
+      (e) => e.props.title === "关闭后顾客不能下单，确定暂停接单？",
+    )[0];
+    (confirm.props.onConfirm as () => void)();
+    await Promise.resolve();
+    tree = renderSettings();
+    expect(save).toHaveBeenLastCalledWith({ is_accepting_orders: false });
+    expect(find(tree, (e) => e.props.label === "店名")[0].props.value).toBe(
+      "未保存的名字",
+    );
+    (
+      find(tree, (e) => e.props.children === "接受下单")[0].props.onChange as (
+        value: boolean,
+      ) => void
+    )(true);
+    await Promise.resolve();
+    tree = renderSettings();
+    expect(save).toHaveBeenLastCalledWith({ is_accepting_orders: true });
+    expect(find(tree, (e) => e.props.label === "店名")[0].props.value).toBe(
+      "未保存的名字",
+    );
+  } finally {
+    save.mockRestore();
+  }
+});

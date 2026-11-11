@@ -10,6 +10,14 @@ export function settleFromControlD(state: State, bill: InternalBill) {
     .filter((o) => o.status !== "cancelled")
     .reduce((n, o) => n + o.subtotal_cents, 0);
   const snapshot: StoreBillRow = {
+    store_id: store.id,
+    updated_at: new Date().toISOString(),
+    currency: "MYR",
+    is_estimate: false,
+    order_count: bill.orders.length,
+    unserved_count: bill.orders.filter(
+      (o) => o.status === "new" || o.status === "accepted",
+    ).length,
     id: bill.id,
     table_id: table.id,
     table_label: table.label,

@@ -110,13 +110,9 @@ export function StoreShell({
               )}
               {banners}
             </div>
-            {/* Remount all page state when identity, store or write access changes. */}
+            {/* Remount all page state when identity or store changes. */}
             <Fragment
-              key={JSON.stringify([
-                session?.user_id,
-                session?.store?.id,
-                session?.store?.status,
-              ])}
+              key={JSON.stringify([session?.user_id, session?.store?.id])}
             >
               {children}
             </Fragment>

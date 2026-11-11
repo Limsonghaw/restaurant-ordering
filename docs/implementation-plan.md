@@ -176,7 +176,7 @@
 - C1–C4：`app/api/t/[code]/{menu,quote,orders,bill}/route.ts`，全部 `Cache-Control: no-store`，经 customer_api 调 `customer_*` RPC。C3 用 `crypto.randomBytes(32)` 生成账单令牌，通过 Set-Cookie `bt_{table_id 去横线}`（HttpOnly、Secure、SameSite=Strict、Path=/api/t、12 小时）下发，响应体不含令牌；C4 从 cookie 读令牌。
 - S1：`app/store/tables/actions.ts` 的 `getTableQrLinks`（校验 tableIds 属于当前店）。
 - 给前端的约定（页面由前端 PR 做）：不再用 localStorage 存设备 ID 和账单令牌，也不发 `X-Device-Id` / `X-Bill-Token` 头（都在 HttpOnly cookie 里）；下单带 `client_request_id`（失败重试复用同一个）；进度页 10 秒轮询，页面隐藏时停止；收到 410 时按 details.reason 显示：bill_paid →「已结账，谢谢光临」，qr_rotated →「二维码已更新，请重新扫码」，expired →「页面已过期，请重新扫码」，并停止轮询。
-- L-9（rereview-2）：`revoke temporary on database postgres from public`（先在 Preview 确认不影响 Supabase 内部角色，如有影响只对 customer_api 收回）；`alter function public.customer_place_order(...) set statement_timeout = '3s'`（其余 3 个 customer_* 同样设置），会话里的 SET 覆盖不了函数级设置；`lib/supabase/customer.ts` 连接参数固定 `connection: { options: '-c statement_timeout=3000' }`（postgres.js 写法以库文档为准）。迁移放 `0006_customer_timeouts.sql`（0005 已被 PR1b 的低-4 占用，rereview-3）。
+- L-9（rereview-2）：`revoke temporary on database postgres from public`（先在 Preview 确认不影响 Supabase 内部角色，如有影响只对 customer_api 收回）；`alter function public.customer_place_order(...) set statement_timeout = '3s'`（其余 3 个 customer_* 同样设置），会话里的 SET 覆盖不了函数级设置；函数级 statement_timeout 已覆盖，连接参数经 Supavisor 可能被拒，已删除。实际迁移为 `0007_customer_timeouts.sql`（0006 为幂等设备绑定）。
 - L-11（书面接受风险）：同店同 IP 计数在并发下可能少量超过 20 / 100 单的阈值，不加 `pg_advisory_xact_lock`；Upstash 一层和同桌 / 同设备限流仍在。
 
 **验收标准**
@@ -195,13 +195,31 @@
 
 ## PR4 订单与结账数据层 + Realtime hook
 
+A 组顾客接口与数据库补充（不涉及 B 组 lib/data、lib/realtime）：
+
+- `0008_bill_qr_rotated.sql` 仅替换 customer_get_bill；先用当前版本检查店铺，再验证令牌的店/桌/设备归属。本人令牌先判撤销（保留最早原因）、再判过期；仍有效的新令牌配旧码返回 404。无本人令牌的旧码统一 404；店停用优先 403。保留函数级 3 秒超时、空 search_path、SECURITY DEFINER 与 customer_api 独占 EXECUTE。
+- PR3 验收第 6 条由以下规则补充：旧码本人令牌得到 410 qr_rotated 并清 cookie，410 不增加 invalidIp；bill_paid、expired 同样清 cookie。PGlite 覆盖精确说明 14 项，pgTAP CI 复验配置/授权及判定顺序。
+- 请求先通过独立 orderProbe 硬限流（每设备 30/min、每 IP 60/min，故障拒绝），再调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过下单配额与 Turnstile；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
+- L-1：生产只支持 Vercel（平台覆盖 x-vercel-forwarded-for）；x-real-ip 仅本地开发/测试使用，生产缺可信头归 unknown。IPv6 /64 分桶，IPv4-mapped 统一为 IPv4。上线监控应统计 unknown 比例并报警；本地不接监控服务。
+- L-2：前端 PR-D 为 place_order widget 设置 `cData = table_id + '_' + client_request_id`，请求字段仍是 `captcha_token`。服务端发送 idempotency_key=client_request_id，严格核对 success/action/hostname/cdata；仅 Cloudflare 官方 always-pass 测试 secret 允许缺 cdata，生产不得使用测试 key。
+- L-4：函数级 statement_timeout 已覆盖，连接参数经 Supavisor 可能被拒，已删除；连接仍保持 max=1、prepare=false、ssl=require。
+- L-5：quote/orders 在 JSON 解析前限制 16 KiB，检查 Content-Length 并逐块计量无长度/虚报长度的请求，超限返回 413 PAYLOAD_TOO_LARGE。
+- Retry-After 使用数据库 retry_after_seconds 或限流窗口秒数，向上取整且至少 1；无值默认 60。应用层 CAPTCHA_REQUIRED 带 details.scope。顾客停用提示为「本店暂停服务」，共享错误表的店家文案保持原样。
+
+
 **开工条件**：PR2、PR3 已合并。
 
 **范围**（不含页面；P5 / P6 在前端 PR）
-- M9–M12、R1、R2：`lib/data/{orders,bills}.ts`；`lib/realtime/useStoreChannel.ts`（postgres_changes 订阅 orders、bills，filter `store_id=eq.{id}`；频道用 `channel('store:'+id, { config: { private: true } })`，Supabase Dashboard 的 Realtime 设置关闭「Allow public access」）。
+- M9–M12、R1、R2：`lib/data/live.ts` + `lib/data/supabase/live-orders.ts`；账单 `lib/data/bills.ts` + `lib/data/{mock,supabase}/bills.ts`；`lib/realtime/useStoreChannel.ts`（postgres_changes 订阅 orders、bills，filter `store_id=eq.{id}`；频道用 `channel('store:'+id, { config: { private: true } })`，Supabase Dashboard 的 Realtime 设置关闭「Allow public access」）。
 - 补拉：重连、visibilitychange、每 60 秒，`updated_since = 上次最大 updated_at − 30s`，按 id 去重合并。
 - 提示音：存在 `status='new'` 时每 10 秒响一次；首次需用户点击「开启声音」。
 - 给前端的约定：P5 进行中订单按设计文档 §21 Q5 的查询（served 订单用 `orders_store_served_idx`）；P6 账单列表分页 20/页；订单卡与账单详情显示「设备 #n」（orders.device_seq_in_bill，L-N3），不显示哈希。
+
+- PR2 统一入口：`lib/data/store.ts`、`lib/data/tables.ts`（经 `lib/data/index.ts` 导出）；完整资料用 getStore/updateStore，营业状态用 getStoreStatus/setAcceptingOrders，仅读 name/status/is_accepting_orders，开关只写 is_accepting_orders。
+- `listBills(BillFilters)` 页码从 1 开始，20/页，返回 BillPage；paid_from/paid_to 为 YYYY-MM-DD，末日包含，内部用 UTC+8 半开区间。getBillDetail 返回 BillDetail；markBillPaid 返回 CheckoutResult（冻结费率、金额、paid_at、table_id、tokens_revoked、is_estimate=false）。P6 重读 bill_overview 金额，不用 Realtime 裸行重算。
+- `useStoreChannel(storeId)` 返回 orders、connection、error、soundEnabled、enableSound、refresh；orders 包含补拉终态，P5 按状态筛选。P5 可保留 LiveProvider 或采用新 hook，同一用途不可同时启用，以免重复订阅和响铃。
+- 顾客 fetch 请求固定 same-origin/no-store；PlaceOrderBody 兼容 turnstile_token 别名（两者都有时别名优先），线上只发送 captcha_token。菜单 table.id 可供前端构造 cData。DataErrorCode 扩展账单冲突及 PAYLOAD_TOO_LARGE；保留 HTTP status、details.scope/reason/新金额、Retry-After 秒数和服务端文案。
+- build-guards 用受控 fetch 验证未配置数据源仍 isMock=false，并核对菜单路径和请求选项，替换已失效的 NOT_IMPLEMENTED 占位预期。
 
 **验收标准**（1–2、6 在前端 P5 / P6 合并后联调）
 1. 顾客下单后 2 秒内店家页面出现新订单并响铃；两台店家设备同时打开都能收到。
@@ -219,7 +237,7 @@
 **范围**（数据层、cron、脚本与 CI；P10 / P11 / 拉黑列表 / 管理员 TOTP 页面在前端 PR）
 - M13（P10 订单记录按日；未付金额取实时 `open_bills`，前端问题 (c)）、R8（统计卡片）、M14 + R9 + R13（一键拒单并拉黑、拉黑列表、按拉黑记录 id 解除，0004 已有 RPC）。
 - R10、R11（店铺列表、停用 / 启用、原因）的数据层；管理员 TOTP 上线前，紧急停店用 `docs/runbook-emergency-suspend-store.md`。
-- Turnstile：`stores.require_captcha` 或店级 10 分钟超 120 单时，C3 返回 `CAPTCHA_REQUIRED`，前端弹出后带 `turnstile_token` 和同一 `client_request_id` 重提。
+- Turnstile：`stores.require_captcha` 或店级 10 分钟超 120 单时，C3 返回 `CAPTCHA_REQUIRED`，前端弹出后带 `captcha_token` 和同一 `client_request_id` 重提。
 - 监控：每日汇总（429 次数、无效码次数、高取消率设备）写入 audit_logs，平台页面可查看；`private.purge_expired()` 用 pg_cron 每天执行（删除过期或撤销满 7 天的令牌、过期拉黑；order_client_meta 设备 / IP 哈希 30 天后置空；审计日志保留 180 天）。
 - 后续项（安全审查 L8 与其他建议，不阻塞上线）：price_cents、is_accepting_orders、service_charge_bp、sst_bp、is_active 的 AFTER UPDATE 审计触发器；二维码多密钥轮换（key id）。平台管理员 aal2 与 no_store 已在 PR1b 的数据库层生效，/admin/mfa 绑定与验证页面由前端做（`supabase.auth.mfa.*`，流程见设计文档 §21 第 9 问）；本 PR 做 `lib/auth/guard.ts` 的 needs_mfa 判定联调、`MFA_REQUIRED` 的错误映射、`scripts/ops/create-admin.ts`（运维机器用 secret key 建账号，app_metadata = `{ no_store: true, provisioned_by: 'ops' }`，M-3 / L-4；rereview-3 中-1 做法 A，脚本已在仓库：① `auth.admin.createUser` 不带 password、`email_confirm: true` → ② `auth.admin.updateUserById(id, { password })` → ③ `signInWithPassword` 自检，失败以非 0 退出；机密只从环境变量 `SUPABASE_URL` / `SUPABASE_SECRET_KEY` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` 读取；`profiles.role = 'platform_admin'` 仍在 SQL Editor 手工设置）。
 - L-N6：CI 用 Management API 读取生产 Auth 配置，test OTP 不为空则失败。短信监控：over_sms_send_rate_limit 次数、Twilio Usage Trigger 告警邮件接收人；`user_updated` 审计里 phone 字段变化的次数（rereview-3 低-1）。首单审核的逻辑与界面（stores.require_first_order_approval 已预留，开启后的行为见设计文档 §12）不在 v1。
@@ -282,3 +300,8 @@
 1. 短信服务商选型：推荐 Twilio Verify（设计文档 §20；上线设置见 `docs/launch-checklist-twilio.md`）。未回复前 PR1 / PR2 按 Twilio Verify 配置；换服务商只改 config.toml 与环境变量，不改代码。
 
 已拍板（2026-11-04）：邮箱或手机号注册、验证通过后才建店（含 M5）；首单审核做成店家开关、默认关，v1 只建字段，加入码不做（H1）。
+
+本地运行：`isNonLocalEnv()` 统一定义为 NODE_ENV=production 或 VERCEL_ENV 去空格非空（包括 preview/development）。instrumentation.register 在服务就绪前拒绝非本地环境设置任何 TRUST_LOCAL_IP 或 CUSTOMER_DB_SSL=disable；CI 未设置这两个开关，构建不受影响。
+SSL 默认 require，仅本地显式 disable 且 URL.hostname 严格等于 localhost / 127.0.0.1 可关闭；不接受 ::1 或主机前后缀。postgres URL 的 LOCALHOST 保留大小写，因此也维持 require。
+只有 VERCEL=1 信任 x-vercel-forwarded-for；否则非本地一律 unknown。本地 TRUST_LOCAL_IP=1 取 XFF 首地址再取 x-real-ip；未启用时保留 development/test 的 x-real-ip 支持。非法平台头不回退，unknown 共桶需监控。
+Realtime bills 事件按本店 bill_id 刷新；无 id 事件按订阅水位减 30 秒增量补拉，只派发 new/accepted 或 Asia/Kuala_Lumpur 当天创建的订单，避免历史终态订单灌入列表。

@@ -1,22 +1,65 @@
 import * as mock from "./mock/store-d";
-import { DataError } from "./types";
-// PR4 provides real merchant adapters. Keep the placeholder outside protected supabase files.
+import * as bills from "./bills";
+import * as tables from "./tables";
+import * as store from "./store";
+import {
+  DataError,
+  type StoreBillFilters,
+  type StoreBillDetail,
+  type StoreBillPage,
+  type StoreProfilePatch,
+} from "./types";
 const unavailable = async (): Promise<never> => {
   throw new DataError("NOT_IMPLEMENTED", "未实现");
 };
-const real: typeof mock = {
-  setStoreTableActive: unavailable,
-  listStoreBills: unavailable,
-  getStoreBill: unavailable,
-  markBillPaid: unavailable,
-  listStoreTables: unavailable,
-  createStoreTable: unavailable,
-  renameStoreTable: unavailable,
-  softDeleteStoreTable: unavailable,
-  rotateStoreTableQr: unavailable,
+const real = {
+  listStoreBills: async (
+    status: "open" | "paid",
+    page = 1,
+    filters: StoreBillFilters = {},
+  ): Promise<StoreBillPage> => {
+    const result = await bills.listBills({
+      status,
+      page,
+      table_id: filters.table_id,
+      paid_from: filters.paid_date,
+      paid_to: filters.paid_date,
+    });
+    return {
+      ...result,
+      bills: result.bills.map((b) => ({
+        ...b,
+        is_estimate: b.is_estimate ?? b.status === "open",
+      })),
+    };
+  },
+  getStoreBill: async (id: string): Promise<StoreBillDetail> => {
+    const { bill, orders } = await bills.getBillDetail(id);
+    return {
+      ...bill,
+      orders,
+      order_count: bill.order_count ?? orders.length,
+      unserved_count:
+        bill.unserved_count ??
+        orders.filter((o) => o.status === "new" || o.status === "accepted")
+          .length,
+      is_estimate: bill.is_estimate ?? bill.status === "open",
+    };
+  },
+  listStoreTables: tables.listTables,
+  createStoreTable: tables.createTable,
+  renameStoreTable: (id: string, label: string) =>
+    tables.updateTable(id, { label }),
+  softDeleteStoreTable: tables.deleteTable,
+  setStoreTableActive: (id: string, is_active: boolean) =>
+    tables.updateTable(id, { is_active }),
+  rotateStoreTableQr: tables.rotateTableQr,
+  getStoreProfile: store.getStore,
+  saveStoreProfile: async (patch: StoreProfilePatch) => {
+    await store.updateStore(patch);
+    return store.getStore();
+  },
   getStoreTableQrLinks: unavailable,
-  getStoreProfile: unavailable,
-  saveStoreProfile: unavailable,
   getStoreHistory: unavailable,
   storeMockActionD: unavailable,
 };
@@ -24,7 +67,6 @@ export const {
   setStoreTableActive,
   listStoreBills,
   getStoreBill,
-  markBillPaid,
   listStoreTables,
   createStoreTable,
   renameStoreTable,
