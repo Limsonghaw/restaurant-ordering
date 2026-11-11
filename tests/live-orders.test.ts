@@ -8,6 +8,12 @@ import {
 } from "../lib/data/live-rules";
 vi.stubEnv("NEXT_PUBLIC_DATA_SOURCE", "mock");
 const data = await import("../lib/data");
+const { authRead, authSave } = await import("../lib/data/mock/auth-c");
+function identity(name: string | null) {
+  const auth = authRead();
+  auth.identity = name ? `auth-${name}` : null;
+  authSave(auth);
+}
 class StorageStub {
   values = new Map<string, string>();
   getItem(key: string) {
@@ -36,6 +42,7 @@ beforeEach(() => {
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("navigator", { onLine: true });
   vi.stubGlobal("localStorage", new StorageStub());
+  identity("owner");
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -231,4 +238,90 @@ describe("P5 接单合约", () => {
     } as LiveOrder;
     expect(mergeLiveOrders([newer], [old, newer])).toEqual([newer]);
   });
+});
+
+it("scopes reads and writes to the authenticated store", async () => {
+  const ownerOrders = await finish(data.listLiveOrders());
+  identity("disabled");
+  expect((await finish(data.getStoreStatus())).status).toBe("suspended");
+  for (const request of [
+    () =>
+      data.updateOrderStatus(ownerOrders[0].id, {
+        to: "accepted",
+        expected: "new",
+      }),
+    () => data.setAcceptingOrders(true),
+  ])
+    await expect(finish<unknown>(request())).rejects.toMatchObject({
+      code: "STORE_SUSPENDED",
+    });
+  identity("new");
+  expect(await finish(data.listLiveOrders())).toEqual([]);
+  expect(await finish(data.listServedToday())).toEqual([]);
+  expect(
+    await finish(data.fetchOrdersUpdatedSince(new Date(0).toISOString())),
+  ).toEqual([]);
+  await expect(
+    finish(
+      data.updateOrderStatus(ownerOrders[0].id, {
+        to: "accepted",
+        expected: "new",
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  await finish(data.setAcceptingOrders(false));
+  identity("owner");
+  expect((await finish(data.getStoreStatus())).is_accepting_orders).toBe(true);
+  identity(null);
+  for (const request of [
+    () => data.listLiveOrders(),
+    () => data.listServedToday(),
+    () => data.fetchOrdersUpdatedSince(new Date(0).toISOString()),
+    () => data.getStoreStatus(),
+    () => data.setAcceptingOrders(true),
+    () =>
+      data.updateOrderStatus(ownerOrders[0].id, {
+        to: "accepted",
+        expected: "new",
+      }),
+  ])
+    await expect(finish<unknown>(request())).rejects.toMatchObject({
+      code: "UNAUTHENTICATED",
+    });
+});
+it("does not deliver orders to another store or an old session subscription", async () => {
+  const callbacks = {
+    onInsert: vi.fn(),
+    onUpdate: vi.fn(),
+    onConnectionChange: vi.fn(),
+  };
+  identity("new");
+  const stopWrong = data.subscribeStoreOrders("store-0", callbacks);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(callbacks.onConnectionChange).toHaveBeenLastCalledWith("disconnected");
+  expect(callbacks.onInsert).not.toHaveBeenCalled();
+  stopWrong();
+  identity("owner");
+  const stop = data.subscribeStoreOrders("store-0", callbacks);
+  await vi.advanceTimersByTimeAsync(500);
+  identity("new");
+  await data.runLiveMockAction("new");
+  await vi.advanceTimersByTimeAsync(500);
+  expect(callbacks.onConnectionChange).toHaveBeenLastCalledWith("disconnected");
+  expect(callbacks.onInsert).not.toHaveBeenCalled();
+  expect(callbacks.onUpdate).not.toHaveBeenCalled();
+  stop();
+});
+
+it("keeps controls on the session store and available without a session", async () => {
+  const initial = await finish(data.listLiveOrders());
+  identity("new");
+  await data.runLiveMockAction("three");
+  expect(await finish(data.listLiveOrders())).toEqual([]);
+  identity("owner");
+  expect(await finish(data.listLiveOrders())).toHaveLength(initial.length);
+  identity(null);
+  await data.runLiveMockAction("new");
+  identity("owner");
+  expect(await finish(data.listLiveOrders())).toHaveLength(initial.length + 1);
 });
