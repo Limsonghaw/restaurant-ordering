@@ -2,9 +2,9 @@
 
 本文说明如何在 Windows 上用 Docker Desktop（WSL2）启动本仓库的本地 Supabase，再以 `npm run dev` 连接真实数据层，验证扫码下单和店家后台。命令一律在 **PowerShell** 中执行，并先 `cd` 到仓库根目录。
 
-不要用 `npm start`（即 `next start`）：它会按生产环境处理，不能设置 `CUSTOMER_DB_SSL=disable`，本地 IP 规则也不可用。本地请只用 `npm run dev`。
+不要用 `npm start`（即 `next start`）：它会按 production 运行（`NODE_ENV=production`），进程会拒绝 `CUSTOMER_DB_SSL=disable` 和 `TRUST_LOCAL_IP`，也读不到本地 IP 头。本地请只用 `npm run dev`（`next dev`）。
 
-本说明对应仓库当前 main（迁移至 `0009_customer_check_replay.sql`）。密钥只放在本机 `.env.local`，不要提交，也不要把真实生产密钥写进本文或仓库。
+本说明对应已合并 PR #12 的 main（`c03f95d`，含设置页 logo 上传；迁移至 `0009_customer_check_replay.sql`）。密钥只放在本机 `.env.local`，不要提交，也不要把真实生产密钥写进本文或仓库。
 
 若只想看假数据预览、不启数据库，可按根目录 `README.md` 使用默认的 `NEXT_PUBLIC_DATA_SOURCE=mock`，无需 Docker。下面步骤针对 `NEXT_PUBLIC_DATA_SOURCE=supabase`。
 
@@ -85,7 +85,7 @@ npx supabase start
 npx supabase status
 ```
 
-输出中会有 API URL、anon key、数据库连接串，以及 Studio、本地邮箱（Mailpit）等地址。邮箱确认请在 status 列出的本地邮箱界面里打开链接。`config.toml` 里 `[auth.email] enable_confirmations = true`，`[auth.sms] enable_signup = false`（本地不能用短信注册，请用邮箱）。
+输出中会有 API URL、anon key、数据库连接串，以及 Studio、本地邮箱等地址。本地邮箱对应 CLI 可排除的容器名是 `mailpit`（部分 `status` 输出仍可能标为 Inbucket）。邮件确认请在该界面打开链接，不需要真实 SMTP。`config.toml` 里 `[auth.email] enable_confirmations = true`，`[auth.sms] enable_signup = false`，注释写明本地在配置短信服务商之前保持关闭、**没有测试 OTP**，因此不能用短信或本地测试号码注册，请用邮箱。
 
 ### 种子数据：仓库里没有
 
@@ -131,8 +131,8 @@ Copy-Item .env.example .env.local
 | `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000`（不要尾斜杠；须与本机页面主机名一致，Turnstile 会校验 hostname） |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | 若 status 另有 publishable key 则填写；没有就留空，应用会回退到 `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
 | `CUSTOMER_API_DATABASE_URL` | `postgresql://customer_api:<上一步生成的密码>@127.0.0.1:54322/postgres`（端口来自 `config.toml` 的 `[db] port`。主机必须是 `127.0.0.1` 或 `localhost`，否则不能关 SSL） |
-| `CUSTOMER_DB_SSL` | `disable`（仅限本机 loopback；默认 `require` 会连不上没有 TLS 的本地 Postgres） |
-| `TRUST_LOCAL_IP` | 一般可省略。只有需要读取 `X-Forwarded-For` 时才设为 `1`，且只能出现在本地 |
+| `CUSTOMER_DB_SSL` | `disable`。本地 Supabase 的 Postgres 没有 SSL；默认 `require` 会连不上。该值仅在主机为 `localhost` 或 `127.0.0.1`、且非生产环境时才会真正关闭 SSL |
+| `TRUST_LOCAL_IP` | 要测 IP 限流时设为 `1`（只在非生产环境生效，生产或设置了 `VERCEL_ENV` 会直接报错）。设为 `1` 后才读取 `X-Forwarded-For` 的首地址，没有再用 `x-real-ip`。不设也能跑：`npm run dev` 时仍会尝试读 `x-real-ip`，直接用浏览器访问通常没有这个头，IP 会记成 `unknown`，所有请求共用一个限流桶 |
 | `QR_SIGNING_SECRET` | 本机随机值，不要用生产密钥。可用：`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
 | `CLIENT_HASH_SECRET` | 同上，另生成一串 |
 | `DEVICE_COOKIE_SECRET` | 同上，另生成一串 |
@@ -155,9 +155,13 @@ Copy-Item .env.example .env.local
 - `2x00000000000000000000AB`：总是失败
 - `3x00000000000000000000FF`：强制交互验证
 
-服务端 `TURNSTILE_SECRET_KEY` 请使用 Cloudflare 官方测试 secret。本地推荐与「总是通过」site key 配对的 `1x0000000000000000000000000000000AA`（代码里把这一值视为官方 always-pass secret）。这些是 Cloudflare 公开测试凭据，不是本项目的生产密钥。
+服务端 `TURNSTILE_SECRET_KEY` 请使用 Cloudflare 官方测试 secret。本地推荐与「总是通过」site key 配对的 `1x0000000000000000000000000000000AA`。这些是 Cloudflare 公开测试凭据，不是本项目的生产密钥，**只用于本地或预览测试**。
 
-本地 Auth 的 `[auth.captcha] enabled = false`，GoTrue 不会校验注册/登录验证码；但前端在 supabase 模式下仍要有效的 site key 才能得到令牌。下单接口会调用 siteverify，并检查 `action === place_order` 以及返回的 hostname 是否等于 `NEXT_PUBLIC_SITE_URL` 的主机名，因此本地必须是 `http://localhost:3000`，并在浏览器用这个地址打开，不要改用 `127.0.0.1:3000`。
+没配 Upstash 时，下单接口会一律要求人机验证，所以上述测试 key 是走通本地下单所必需的（同时仍须配置 Upstash，否则菜单/报价/账单会 429，见下节）。
+
+代码只对这一个官方 always-pass secret（`1x0000000000000000000000000000000AA`）跳过 `cData`（桌号 + `client_request_id`）绑定检查；其它测试 secret 不会跳过。即便使用 always-pass secret，仍会校验 `action === place_order` 以及返回的 hostname 是否等于 `NEXT_PUBLIC_SITE_URL` 的主机名。因此本地必须是 `http://localhost:3000`，并在浏览器用这个地址打开，不要改用 `127.0.0.1:3000`。跳过 cData 检查只为方便本地测试，不能用于生产。
+
+本地 Auth 的 `[auth.captcha] enabled = false`，GoTrue 不会校验注册/登录验证码；但前端在 supabase 模式下仍要有效的 site key 才能得到令牌。
 
 ### Upstash
 
@@ -189,8 +193,8 @@ npm run dev
 
 1. **注册店家并完成资料**
    - 打开 `http://localhost:3000/register`，用邮箱注册（不要用手机号）。
-   - 在 `npx supabase status` 给出的本地邮箱（Mailpit）里打开确认链接，再设置密码。
-   - 登录后进入店家后台，打开 **设置**（`/store/settings`）：填写店名、地址、营业时间，打开「接受下单」，保存。当前 main 的设置页仍是手填图片路径，而数据库只接受 `{店铺id}/logo/{uuid}.扩展名` 这种上传路径，本地可先把店铺图片留空。
+   - 在 `npx supabase status` 给出的本地邮箱界面（Mailpit，有的输出仍可能叫 Inbucket）里打开确认链接，再设置密码。不需要真实邮件或短信服务商。
+   - 登录后进入店家后台，打开 **设置**（`/store/settings`）：填写店名、地址、营业时间，打开「接受下单」。店铺图片用「上传图片」，选择 JPG、PNG 或 WebP（最大 2 MB），预览出现后再保存。文件会上传到迁移 `0001_init.sql` 创建的公共桶 `menu-images`，路径为 `{店铺id}/logo/{uuid}.扩展名`。可在 Studio 的 Storage 中打开该桶核对；顾客页也应能显示这张 logo。上传依赖 Storage，须使用完整的 `npx supabase start`（不要排除 `storage-api`）。菜单里的菜品图片同样进入此桶的 `{店铺id}/items/` 目录。
 2. **桌位页**
    - 打开 **桌位**（`/store/tables`），新建一张桌子，确认能改名、停用/启用。
    - 查看或打印该桌二维码。链接应落在 `http://localhost:3000/t/…`（由 `NEXT_PUBLIC_SITE_URL` 拼接并签名）。把链接复制到本机浏览器打开，或用手机扫码（手机须能访问你电脑的该地址；若只在本机浏览器打开同一链接也可验证）。
@@ -250,4 +254,6 @@ npx supabase db reset --local
 | 实时订单不更新 | 用完整 `npx supabase start`（不要 `-x realtime`）；检查浏览器能否连到 API 的 WebSocket。 |
 | 正式感的报错：「生产环境必须配置正式 Turnstile…」或不能关 SSL | 不要用 `npm start`，不要在本机 `.env.local` 设置 `VERCEL_ENV`。 |
 | `NEXT_PUBLIC_DATA_SOURCE 必须明确设置为 mock 或 supabase` | `.env.local` 未生效或拼写错误，改完后重启 `npm run dev`。 |
+| 设置页或菜单上传图片失败 | 确认用了完整 `npx supabase start`（含 Storage），文件为 JPG/PNG/WebP 且不超过 2 MB。对象应出现在 Studio → Storage → `menu-images`。 |
+| 本地 IP 限流测不出来 / 所有人共用限额 | 直接访问 `next dev` 时 IP 常为 `unknown`。要测按 IP 的限流，在 `.env.local` 设 `TRUST_LOCAL_IP=1` 并重启 `npm run dev`，再用带 `X-Forwarded-For` 的请求。不要在生产环境设置该变量。 |
 
