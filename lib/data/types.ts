@@ -341,3 +341,20 @@ export type LiveMockAction =
   | "other"
   | "other_silent"
   | "paid";
+
+// PR2 merchant database additions (append only).
+export type MerchantErrorCode =
+  | "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "STORE_SUSPENDED"
+  | "VALIDATION_FAILED" | "CATEGORY_NOT_EMPTY" | "TABLE_LABEL_TAKEN"
+  | "TABLE_HAS_OPEN_BILL" | "CONFLICT" | "INTERNAL" | "ORDER_BILL_CLOSED"
+  | "FILE_TOO_LARGE" | "UNSUPPORTED_FILE_TYPE" | "UPLOAD_FAILED";
+export interface DiningTable {
+  id: string;
+  label: string;
+  is_active: boolean;
+  qr_version: number;
+  sort_order: number;
+}
+export type StoreProfilePatch = Partial<Pick<Store,
+  "name" | "logo_path" | "address" | "opening_hours" | "is_accepting_orders" | "service_charge_bp" | "sst_bp"
+>>;
