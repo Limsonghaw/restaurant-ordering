@@ -25,9 +25,9 @@ export function validateOrderChange(
       !["sold_out", "customer_request", "duplicate", "other"].includes(
         change.cancel_reason,
       ) ||
-      (change.cancel_note?.length ?? 0) > 200)
+      Array.from(change.cancel_note ?? "").length > 100)
   )
-    throw new DataError("VALIDATION_FAILED", "请选择取消原因，说明最多 200 字");
+    throw new DataError("VALIDATION_FAILED", "请选择取消原因，说明最多 100 字");
 }
 export function malaysiaDay(now = Date.now()) {
   const start = Date.parse(
