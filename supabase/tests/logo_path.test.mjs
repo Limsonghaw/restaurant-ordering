@@ -12,6 +12,7 @@ try {
   const [{ store_id: store }] = (await db.query('select store_id from store_members where user_id=$1', [user])).rows;
   const [{ id: category }] = (await db.query("insert into categories(store_id,name) values ($1,'paths') returning id", [store])).rows;
   const [{ id: item }] = (await db.query("insert into items(store_id,category_id,name,price_cents) values ($1,$2,'paths',100) returning id", [store, category])).rows;
+  const [{ id: otherStore }] = (await db.query("insert into stores(slug,name) values ('other-path-store','other') returning id")).rows;
   const uuid = '11111111-1111-4111-8111-111111111111';
   let assertions = 0;
   for (const [table, column, id, directory, suffix, constraint] of [
@@ -21,6 +22,11 @@ try {
   ]) {
     const valid = `${store}/${directory}/${uuid}${suffix}.webp`;
     const invalid = [`https://evil.invalid/${valid}`, `http://evil.invalid/${valid}`, `//evil.invalid/${valid}`, `data:image/png;base64,AAA`, `${uuid}/${directory}/${uuid}${suffix}.png`, `${store}/${directory}/../${uuid}${suffix}.png`, `${valid}/..`, `${store}/${directory}/${uuid}${suffix}.svg`];
+    invalid.push(`${valid}\n`, `${store}/${directory}/\n${uuid}${suffix}.png`,
+      `${store}/${directory.toUpperCase()}/${uuid}${suffix}.png`,
+      `${store}/${directory}/AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA${suffix}.png`,
+      valid.replace(/webp$/, 'PNG'), `${valid}.png`,
+      `${otherStore}/${directory}/${uuid}${suffix}.png`);
     for (const path of invalid) {
       await assert.rejects(db.query(`update ${table} set ${column}=$1 where id=$2`, [path, id]), e => e.code === '23514' && e.constraint === constraint);
       assertions++;

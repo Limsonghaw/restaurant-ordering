@@ -6,8 +6,19 @@ export function createClient(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) throw new Error("请配置 Supabase 公开环境变量");
+  const deadline = AbortSignal.timeout(5000);
   const cookies = new NextResponse().cookies;
   const supabase = createServerClient(url, key, {
+    global: {
+      fetch: (url, init) => {
+        const signal = init?.signal
+          ? AbortSignal.any([init.signal, deadline])
+          : deadline;
+        // Do not start another network request after auth-js retries past the deadline.
+        signal.throwIfAborted();
+        return fetch(url, { ...init, signal });
+      },
+    },
     cookieOptions: { sameSite: "lax", secure: process.env.NODE_ENV === "production" },
     cookies: {
       getAll: () => request.cookies.getAll(),
