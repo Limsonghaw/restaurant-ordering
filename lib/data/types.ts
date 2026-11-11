@@ -78,7 +78,10 @@ export type ErrorCode =
   | "PHONE_NOT_CONFIRMED"
   | "UNSUPPORTED_FILE_TYPE"
   | "FILE_TOO_LARGE"
-  | "UPLOAD_FAILED";
+  | "UPLOAD_FAILED"
+  | "ORDER_STATUS_CONFLICT"
+  | "INVALID_STATUS_TRANSITION"
+  | "ORDER_BILL_CLOSED";
 export class DataError extends Error {
   constructor(
     public code: ErrorCode,
@@ -283,3 +286,58 @@ export interface AuthMockSnapshot {
   identity: string | null;
   mails: AuthMail[];
 }
+// PR-B：M9 / R1 / M10 店家接单合约，只追加。
+export interface LiveOrder {
+  id: string;
+  store_id: string;
+  table_id: string;
+  bill_id: string;
+  seq_in_bill: number;
+  device_seq_in_bill: number;
+  status: OrderStatus;
+  subtotal_cents: number;
+  item_count: number;
+  created_at: string;
+  accepted_at: string | null;
+  served_at: string | null;
+  cancelled_at: string | null;
+  updated_at: string;
+  cancel_reason: CancelReason | null;
+  cancel_note: string | null;
+  order_items: OrderLine[];
+  dining_tables: { label: string };
+}
+export interface OrderStatusChange {
+  to: OrderStatus;
+  expected: OrderStatus;
+  cancel_reason?: CancelReason;
+  cancel_note?: string;
+}
+export type LiveStoreStatus = Pick<
+  Store,
+  "name" | "status" | "is_accepting_orders"
+>;
+export type OrderConnection = "connected" | "reconnecting" | "disconnected";
+export interface StoreOrderCallbacks {
+  onInsert: (order: LiveOrder) => void;
+  onUpdate: (order: LiveOrder) => void;
+  onConnectionChange: (status: OrderConnection) => void;
+}
+export interface LiveMockSettings {
+  disconnected: boolean;
+  hold: boolean;
+  expired: boolean;
+  fail_status: boolean;
+  no_wake: boolean;
+  sound_paused: boolean;
+  threshold_ms: number;
+}
+export type LiveMockAction =
+  | "new"
+  | "three"
+  | "missed"
+  | "disconnect"
+  | "reconnect"
+  | "other"
+  | "other_silent"
+  | "paid";

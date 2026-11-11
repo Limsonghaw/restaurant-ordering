@@ -67,7 +67,7 @@ export async function blockClientFromOrder(order_id: string) {
   );
   const order = bill?.orders.find((o) => o.id === order_id);
   if (!order) throw new DataError("NOT_FOUND", "这张订单已被处理");
-  if (!["new", "accepted"].includes(order.status))
+  if (bill?.status === "paid" || !["new", "accepted"].includes(order.status))
     throw new DataError("VALIDATION_FAILED", "这张订单已被处理");
   order.status = "cancelled";
   order.cancel_reason = "other";

@@ -2,7 +2,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { getSession, onSessionChange, signOut, type Session } from "../data";
+import {
+  getSession,
+  onSessionChange,
+  signOut,
+  type Session,
+  type StoreStatus,
+} from "../data";
 import { errorMessage } from "../format";
 import { storeNavigation, routes } from "../routes";
 import { Banner, ErrorState, Modal, Skeleton } from "./common";
@@ -10,10 +16,12 @@ export function StoreShell({
   children,
   banners,
   newOrderCount,
+  storeStatus,
 }: {
   children: ReactNode;
   banners?: ReactNode;
   newOrderCount?: number;
+  storeStatus?: StoreStatus;
 }) {
   const path = usePathname();
   const router = useRouter();
@@ -71,7 +79,7 @@ export function StoreShell({
         ) : (
           <>
             <div aria-label="店铺提示">
-              {session?.store?.status === "suspended" && (
+              {(storeStatus ?? session?.store?.status) === "suspended" && (
                 <Banner tone="red">店铺已被平台停用，请联系平台</Banner>
               )}
               {session?.store && !session.store.is_profile_complete && (

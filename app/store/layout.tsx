@@ -1,9 +1,9 @@
 import { AccessGuard } from "@/lib/ui/access-c";
-import { StoreShell } from "@/lib/ui/store-shell";
+import { LiveProvider } from "@/lib/ui/live-provider";
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <AccessGuard>
-      <StoreShell>{children}</StoreShell>
+      <LiveProvider>{children}</LiveProvider>
     </AccessGuard>
   );
 }

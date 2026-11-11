@@ -1,0 +1,151 @@
+.live-page {
+  min-width: 0;
+}
+.live-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #fffefb;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.live-topbar h1 {
+  width: 100%;
+  margin: 0;
+}
+.live-topbar a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.live-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.live-column {
+  min-width: 0;
+}
+.live-column > h2 {
+  font-size: 18px;
+  padding: 10px 4px;
+}
+.live-count {
+  background: #e2eadf;
+  border-radius: 20px;
+  padding: 3px 10px;
+}
+.live-order {
+  padding: 14px;
+}
+.live-order h3 {
+  font-size: 32px;
+  line-height: 1.2;
+  margin: 0;
+}
+.live-new {
+  border: 2px solid #c39438;
+  background: #fffbed;
+}
+.live-order ul {
+  padding: 0;
+  list-style: none;
+}
+.live-order li {
+  margin: 14px 0;
+}
+.live-note {
+  color: #96362e;
+  background: #fff0e2;
+  padding: 8px;
+  margin-top: 6px;
+}
+.live-actions {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+.live-actions .button {
+  min-height: 48px;
+  width: 100%;
+}
+.live-tabs {
+  display: none;
+}
+.live-start {
+  position: fixed;
+  inset: 0;
+  background: #13291fd9;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.live-start section {
+  width: min(520px, 100%);
+  text-align: center;
+  padding: 32px 20px;
+}
+.live-start .button {
+  width: 100%;
+  margin: 20px 0;
+  min-height: 56px;
+}
+.live-reasons {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+}
+.live-reasons label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+  .store-sidebar {
+    width: 175px;
+    padding: 20px 12px;
+  }
+  .store-main {
+    margin-left: 175px;
+    padding: 20px 16px;
+  }
+}
+@media (max-width: 999px) {
+  .live-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .live-column {
+    display: none;
+  }
+  .live-column.selected {
+    display: block;
+  }
+  .live-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .live-tabs .button {
+    padding: 10px 6px;
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+  }
+}
+@media (max-width: 767px) {
+  .live-topbar {
+    gap: 8px;
+    font-size: 13px;
+  }
+  .live-topbar h1 {
+    font-size: 20px;
+  }
+}
