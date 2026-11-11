@@ -54,6 +54,7 @@ export async function getTableMenu(code: string): Promise<TableMenu> {
               !c.deleted,
           ),
       )
+      .sort((a, b) => a.sort_order - b.sort_order)
       .map(
         ({
           id,
@@ -187,5 +188,9 @@ export async function quoteCart(code: string, items: CartItem[]) {
   return quote(readState(), code, items);
 }
 export function imageUrl(path: string | null) {
-  return path && path.startsWith("/mock/") ? path : null;
+  if (path === "/mock/missing.svg") return null;
+  return path &&
+    (path.startsWith("/mock/") || path.startsWith("data:image/webp;base64,"))
+    ? path
+    : null;
 }

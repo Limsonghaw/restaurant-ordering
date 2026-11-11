@@ -358,8 +358,10 @@ export function Toggle({
   checked,
   onChange,
   children,
+  disabled,
 }: {
   checked: boolean;
+  disabled?: boolean;
   onChange: (value: boolean) => void;
   children: ReactNode;
 }) {
@@ -369,6 +371,7 @@ export function Toggle({
         type="checkbox"
         role="switch"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       {children}

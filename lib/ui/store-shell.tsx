@@ -1,10 +1,10 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { getSession, onSessionChange, type Session } from "../data";
+import { getSession, onSessionChange, signOut, type Session } from "../data";
 import { errorMessage } from "../format";
-import { storeNavigation } from "../routes";
+import { storeNavigation, routes } from "../routes";
 import { Banner, ErrorState, Modal, Skeleton } from "./common";
 export function StoreShell({
   children,
@@ -16,6 +16,7 @@ export function StoreShell({
   newOrderCount?: number;
 }) {
   const path = usePathname();
+  const router = useRouter();
   const [session, setSession] = useState<Session | null>();
   const [error, setError] = useState<unknown>();
   const [more, setMore] = useState(false);
@@ -38,6 +39,10 @@ export function StoreShell({
     }
     return () => unsubscribe?.();
   }, [load]);
+  const logout = () =>
+    void signOut()
+      .then(() => router.replace(routes.login))
+      .catch(setError);
   const nav = (entry: readonly [string, string], i: number) => (
     <Link
       className={path === entry[1] ? "active" : ""}
@@ -53,7 +58,10 @@ export function StoreShell({
       <aside className="store-sidebar">
         <h1>茶餐 · 店家</h1>
         <p className="muted">{session?.store?.name ?? "店家后台"}</p>
-        <nav aria-label="后台导航">{storeNavigation.map(nav)}</nav>
+        <nav aria-label="后台导航">
+          {storeNavigation.map(nav)}
+          <button onClick={logout}>退出登录</button>
+        </nav>
       </aside>
       <div className="store-main">
         {error ? (
@@ -65,6 +73,12 @@ export function StoreShell({
             <div aria-label="店铺提示">
               {session?.store?.status === "suspended" && (
                 <Banner tone="red">店铺已被平台停用，请联系平台</Banner>
+              )}
+              {session?.store && !session.store.is_profile_complete && (
+                <Banner tone="yellow">
+                  还没填店铺资料，先去店铺设置填写店名、地址和营业时间{" "}
+                  <Link href={routes.storeSettings}>去店铺设置</Link>
+                </Banner>
               )}
               {banners}
             </div>
@@ -81,6 +95,7 @@ export function StoreShell({
       {more && (
         <Modal title="更多" onClose={close}>
           <nav className="store-more">
+            <button onClick={logout}>退出登录</button>
             {storeNavigation.slice(3).map((entry) => (
               <Link key={entry[1]} href={entry[1]} onClick={close}>
                 {entry[0]}

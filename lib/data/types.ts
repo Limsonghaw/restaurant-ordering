@@ -65,7 +65,20 @@ export type ErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "VALIDATION_FAILED"
-  | "CATEGORY_NOT_EMPTY";
+  | "CATEGORY_NOT_EMPTY"
+  | "PHONE_NOT_SUPPORTED"
+  | "SMS_SEND_FAILED"
+  | "RESET_LINK_INVALID"
+  | "OTP_INVALID"
+  | "REAUTH_REQUIRED"
+  | "WEAK_PASSWORD"
+  | "UNSUPPORTED_MEDIA_TYPE"
+  | "INVALID_CREDENTIALS"
+  | "EMAIL_NOT_CONFIRMED"
+  | "PHONE_NOT_CONFIRMED"
+  | "UNSUPPORTED_FILE_TYPE"
+  | "FILE_TOO_LARGE"
+  | "UPLOAD_FAILED";
 export class DataError extends Error {
   constructor(
     public code: ErrorCode,
@@ -240,3 +253,33 @@ export interface MockSnapshot {
 }
 export type MockAction =
   "paid" | "rotate" | "expire" | "switch_device" | "reset" | "suspend";
+
+export type AuthContact =
+  { email: string; phone?: never } | { phone: string; email?: never };
+export interface AuthMail {
+  id: string;
+  recipient: string;
+  type: string;
+  created_at: string;
+  expires_at: number;
+  used: boolean;
+  next: string;
+}
+export interface ManagedCategory extends Category {
+  is_hidden: boolean;
+  itemCount: number;
+}
+export interface ManagedItem extends MenuItem {
+  is_hidden: boolean;
+  deleted_at?: string | null;
+}
+export type ItemInput = Omit<ManagedItem, "id" | "sort_order" | "deleted_at">;
+export interface StoreMenu {
+  categories: ManagedCategory[];
+  items: ManagedItem[];
+}
+export interface AuthMockSnapshot {
+  aal: "aal1" | "aal2";
+  identity: string | null;
+  mails: AuthMail[];
+}
