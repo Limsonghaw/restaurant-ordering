@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const rpc = vi.hoisted(() => ({
   customerPlaceOrder: vi.fn(),
-  customerReplayOrder: vi.fn(),
+  customerCheckReplay: vi.fn(),
   customerQuote: vi.fn(),
 }));
 vi.mock("../lib/supabase/customer", () => rpc);
@@ -48,7 +48,7 @@ beforeEach(() => {
   code = signTableCode(table);
   const memory = new MemoryRateLimiter();
   vi.spyOn(rateLimiter, "hit").mockImplementation((k, w) => memory.hit(k, w));
-  rpc.customerReplayOrder.mockResolvedValue(null);
+  rpc.customerCheckReplay.mockResolvedValue({ status: "missing" });
   rpc.customerPlaceOrder.mockResolvedValue({
     replayed: false,
     bill_token_issued: false,
@@ -95,7 +95,8 @@ it("production ignores x-real-ip and malformed Vercel headers never fall back", 
   ).toBe("unknown");
 });
 it("confirmed database replay returns 200 without any rate hits, CAPTCHA or new order", async () => {
-  rpc.customerReplayOrder.mockResolvedValue({
+  rpc.customerCheckReplay.mockResolvedValue({ status: "replay" });
+  rpc.customerPlaceOrder.mockResolvedValue({
     replayed: true,
     bill_token_issued: false,
   });
@@ -103,7 +104,7 @@ it("confirmed database replay returns 200 without any rate hits, CAPTCHA or new 
   for (let i = 0; i < 25; i++)
     expect((await order(req(), context())).status).toBe(200);
   expect(rateLimiter.hit).not.toHaveBeenCalled();
-  expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
+  expect(rpc.customerPlaceOrder).toHaveBeenCalledTimes(25);
 });
 it("random IDs cannot bypass device hard limit", async () => {
   for (let i = 0; i < 4; i++) {
@@ -299,7 +300,7 @@ it("orders reject a streamed oversized UTF-8 body by bytes before replay probing
   const r = await order(req(stream), context());
   expect(r.status).toBe(413);
   expect((await r.json()).error.code).toBe("PAYLOAD_TOO_LARGE");
-  expect(rpc.customerReplayOrder).not.toHaveBeenCalled();
+  expect(rpc.customerCheckReplay).not.toHaveBeenCalled();
   expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
 });
 it("JSON body stream read errors fail closed before the database", async () => {
@@ -310,5 +311,53 @@ it("JSON body stream read errors fail closed before the database", async () => {
   });
   const r = await order(req(stream), context());
   expect(r.status).toBe(400);
-  expect(rpc.customerReplayOrder).not.toHaveBeenCalled();
+  expect(rpc.customerCheckReplay).not.toHaveBeenCalled();
 });
+
+it("hard-limited requests run only the read-only check", async () => {
+  vi.mocked(rateLimiter.hit).mockResolvedValue(10000);
+  expect((await order(req(), context())).status).toBe(429);
+  expect(rpc.customerCheckReplay).toHaveBeenCalledOnce();
+  expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
+});
+it("check infrastructure errors fail closed before rates or writes", async () => {
+  rpc.customerCheckReplay.mockRejectedValue(new AppError("INTERNAL"));
+  expect((await order(req(), context())).status).toBe(503);
+  expect(rateLimiter.hit).not.toHaveBeenCalled();
+  expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
+});
+it("check mismatch preserves conflict semantics", async () => {
+  rpc.customerCheckReplay.mockResolvedValue({
+    status: "mismatch",
+    code: "IDEMPOTENCY_KEY_REUSED",
+  });
+  expect((await order(req(), context())).status).toBe(409);
+  expect(rateLimiter.hit).not.toHaveBeenCalled();
+  expect(rpc.customerPlaceOrder).not.toHaveBeenCalled();
+});
+it("explicit local forwarded IP uses first address and IPv6 normalization", () => {
+  vi.stubEnv("TRUST_LOCAL_IP", "1");
+  expect(
+    trustedIp(
+      req(undefined, { "x-forwarded-for": "2001:db8:abcd:12::1, 192.0.2.1" }),
+    ),
+  ).toBe("2001:db8:abcd:12::/64");
+  expect(trustedIp(req(undefined, { "x-real-ip": "192.0.2.1" }))).toBe(
+    "192.0.2.1",
+  );
+});
+it.each(["NODE_ENV", "VERCEL_ENV"])(
+  "%s production ignores local override",
+  (env) => {
+    vi.stubEnv("TRUST_LOCAL_IP", "1");
+    vi.stubEnv(env, "production");
+    expect(
+      trustedIp(
+        req(undefined, {
+          "x-forwarded-for": "192.0.2.1",
+          "x-real-ip": "192.0.2.2",
+        }),
+      ),
+    ).toBe("unknown");
+  },
+);

@@ -3,7 +3,7 @@ const rpc = vi.hoisted(() => ({
   customerGetMenu: vi.fn(),
   customerQuote: vi.fn(),
   customerPlaceOrder: vi.fn(),
-  customerReplayOrder: vi.fn().mockResolvedValue(null),
+  customerCheckReplay: vi.fn().mockResolvedValue({ status: "missing" }),
   customerGetBill: vi.fn(),
 }));
 vi.mock("../lib/supabase/customer", () => rpc);

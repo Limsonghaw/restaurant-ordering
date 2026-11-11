@@ -76,7 +76,7 @@ const expectedAuth = ['admin_list_stores','admin_set_store_status','block_client
   'reorder_categories','reorder_items','rotate_table_qr','soft_delete_item','soft_delete_table','try_uuid','unblock_client','update_order_status'];   // PR1b：+0004 的 4 个函数
 ok('H2 authenticated 只能执行白名单函数', JSON.stringify(authFns) === JSON.stringify(expectedAuth), JSON.stringify(authFns));
 const custFns = (await fnList('customer_api')).map(r => r.proname);
-ok('M7 customer_api 只能执行 4 个 customer_*', JSON.stringify(custFns) === JSON.stringify(['customer_get_bill','customer_get_menu','customer_place_order','customer_quote']), JSON.stringify(custFns));
+ok('M7 customer_api 只能执行 5 个 customer_*（含 0009 只读探测）', JSON.stringify(custFns) === JSON.stringify(['customer_check_replay','customer_get_bill','customer_get_menu','customer_place_order','customer_quote']), JSON.stringify(custFns));
 ok('M7 service_role 不再能执行 customer_place_order', !(await q(`select has_function_privilege('service_role','public.customer_place_order(uuid,uuid,integer,uuid,text,jsonb,text,text,text,text,boolean)','execute') x`))[0].x);
 ok('M7 customer_api 没有任何表权限', (await q(`select 1 from information_schema.role_table_grants where grantee='customer_api'`)).length === 0);
 await asAnon(() => expectErr('H2 anon 调店家 RPC → permission denied', 'permission denied for function update_order_status', () => q(`select update_order_status(gen_random_uuid(),'accepted','new')`)));

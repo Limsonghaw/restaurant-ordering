@@ -355,7 +355,7 @@ C = 顾客 Route Handler（4）；A = 认证（8：7 个由浏览器直接调用
 | code 格式 | `v1.` + base64url(store_id 16 字节 ‖ table_id 16 字节 ‖ qr_version uint16) + `.` + base64url(HMAC-SHA256(QR_SIGNING_SECRET, 前两段)[0..16])，约 72 字符 |
 | 验签 | 常量时间比较；失败 → 404 TABLE_INVALID，并计入 IP 的「无效码」限流（20 次 / 10 分钟） |
 | 设备 | 服务端签发 HttpOnly cookie `did`（Secure、SameSite=Strict、Path=/api/t、1 年）：`v1.{16 字节随机 base64url}.{HMAC(DEVICE_COOKIE_SECRET)}`；C1 首次访问时下发，验签失败当作没有；不再接受客户端自报的 X-Device-Id（M3） |
-| IP | 生产只取 Vercel 平台覆盖的 `x-vercel-forwarded-for`；`x-real-ip` 仅 development/test 可用；不用 `x-forwarded-for`，IPv6 按 /64 分桶、IPv4-mapped 转 IPv4（PR4 L-1） |
+| IP | 生产只取 Vercel 平台覆盖的 `x-vercel-forwarded-for`；`x-real-ip` 仅 development/test 可用；仅显式本地 TRUST_LOCAL_IP=1 可取 `x-forwarded-for` 首地址，IPv6 按 /64 分桶、IPv4-mapped 转 IPv4（PR4 L-1） |
 | 指纹哈希 | HMAC-SHA256(CLIENT_HASH_SECRET, store_id + ':' + 值)，每家店不同，不能跨店关联（L6） |
 | request_hash | sha256(规范化 JSON：code 的 table_id + items 按原顺序的 item_id/quantity/unit_price_cents/note) |
 | 账单令牌 | `crypto.randomBytes(32)`（CSPRNG）base64url；只把 sha256 hex 传给 RPC；放在 HttpOnly cookie `bt_{table_id 去横线}`（Secure、SameSite=Strict、Path=/api/t、Max-Age 12 小时），前端读不到也不用存（M4）；令牌绑定设备，作用域 own_orders：只看本设备在这桌下的订单（H1） |
@@ -418,7 +418,7 @@ export type ApiError = { error: { code: ErrorCode; message: string; details?: un
 
 1. zod 校验 PlaceOrderBody；读取并验签设备 cookie（没有或无效 → 400 VALIDATION_FAILED，前端先调 C1 拿 cookie）。
 2. 验二维码签名 → TABLE_INVALID。
-3. 先在 customer_api 事务中调用现有 customer_place_order 确认重放：只在数据库返回 replayed=true 时提交（允许恢复账单 cookie），跳过应用层计数与验证码。数据库仍检查当前 QR、店状态、店/桌/设备/请求内容。未知 ID 的成功写入也必须回滚，业务拒绝不代表重放，继续以下限流；基础设施故障拒绝请求。未命中的探测事务不持久化订单、令牌、Realtime 通知或数据库配额；不新增表权限，代价是新请求多一次 RPC/事务及临时行锁。
+3. 重放在应用计数前调用 0009 customer_check_replay：STABLE 只读，无锁、无写入，返回 replay / mismatch（IDEMPOTENCY_KEY_REUSED）/ missing，不返回订单。按 0006 校验当前桌码、店铺营业状态、店/桌/设备/内容；resolve_table(order) 有锁，因此用等价只读校验。命中后调用正式 customer_place_order 恢复令牌并返回 200，跳过应用限流与 Turnstile；不存在走全部限流和验证码；探测基础设施故障 INTERNAL/503，拒绝请求。正式 RPC 再校验，保留并发停用/旋转保护。
 4. Upstash 限流（设备 → RATE_LIMITED，带 Retry-After；桌级超 6 次/5 分钟 → 要求 Turnstile，硬拒绝由数据库 table_db 兜底；IP：10 分钟 20 单起要求 Turnstile，100 单才 429，M-N3；店，§12）；桌级超 6 次/5 分钟、IP 超 20 单、店级超阈值、require_captcha，或 Upstash 不可用（fail-closed）时要求 Turnstile：无 captcha_token → CAPTCHA_REQUIRED（应用层 details.scope 为 device/table/ip/store），校验失败 → CAPTCHA_FAILED，通过则 p_captcha_verified=true。
 5. 用 CSPRNG 生成新令牌明文 T，经 lib/supabase/customer.ts（postgres.js，customer_api 身份）调用 `customer_place_order(…, p_device_hash, p_ip_hash, p_bill_token_hash = sha256(cookie 里的旧令牌), p_new_bill_token_hash = sha256(T), p_captcha_verified)`；哈希必须是 64 位 hex（NULL → VALIDATION_FAILED）。
 6. RPC 内：入参判空 → 锁桌子行、店铺行加 for share（L9）→ 店铺/桌子/营业检查 → 幂等（同 request_id 同内容返回原单 replayed=true，同一设备没收到令牌时重新下发；内容不同 IDEMPOTENCY_KEY_REUSED）→ require_captcha → 拉黑 → 数据库兜底限流（桌 / 设备；同店同 IP 10 分钟 ≥100 单 RATE_LIMITED，≥20 单且未过 Turnstile → CAPTCHA_REQUIRED，details.scope = 'ip_db'）→ validate_cart（ITEM_UNAVAILABLE / PRICE_CHANGED，整单拒绝）→ 上限 → 取或开 open 账单 → 沿用或签发本设备令牌（scope=own_orders）→ 写订单（含 device_seq_in_bill）、order_client_meta 与快照明细。
@@ -1231,3 +1231,6 @@ export interface QuoteEstimate {
 | 低-5 | Twilio 每号 5 次上限（60203）映射为 RATE_LIMITED，前端「请稍后再试」 | lib/auth/gotrue-errors.ts（PR2）；真实返回码随清单第 10 项实测 | 待 PR2 |
 | 低-6 | pgTAP 补 value_hash 列权限、不能直接 delete 拉黑，plan(25) | auth_roles.test.sql | 已完成（需 supabase start 实跑） |
 | 信息 1–5 | 不阻塞；信息-4 跳转统一写 new URL(safeNext(next), SITE)，在 PR2 / 前端顺手处理 | — | 记录 |
+
+本地运行：`CUSTOMER_DB_SSL` 默认 `require`。仅显式 `disable`、连接主机为 localhost / 127.0.0.1 / ::1，且 NODE_ENV、VERCEL_ENV 均非 production 时关闭 SSL；远端 disable 仍用 require，避免配置误用降级传输安全。生产不要设置本地开关。
+本地缺少可信 IP 头时可显式 `TRUST_LOCAL_IP=1`，优先读取 XFF 第一个地址，再回退 x-real-ip，同样规范化 IPv4 / IPv6 /64；NODE_ENV 或 VERCEL_ENV 为 production 时开关无效。Vercel 头优先且非法时不回退。生产不要设置；unknown 共桶与监控要求不变。

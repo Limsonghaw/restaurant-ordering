@@ -5,7 +5,7 @@ begin;
 -- Statements under test still run with the target role's own privileges / RLS.
 grant customer_api, authenticated, anon to postgres;
 create extension if not exists pgtap with schema extensions;
-select plan(111);
+select plan(122);
 
 insert into auth.users (id, email, email_confirmed_at, raw_app_meta_data)
 values ('aaaa0000-0000-4000-8000-000000000001', 'security-a@example.invalid', now(), '{}'),
@@ -67,7 +67,7 @@ select throws_ok($assert$select pg_temp.as_role('anon', $$select public.get_my_c
 select is((select array_agg(p.proname::text order by p.proname) from pg_proc p
  where p.pronamespace in ('public'::regnamespace, 'private'::regnamespace)
  and has_function_privilege('customer_api', p.oid, 'execute')),
- array['customer_get_bill','customer_get_menu','customer_place_order','customer_quote']::text[], 'customer function allowlist');
+ array['customer_check_replay','customer_get_bill','customer_get_menu','customer_place_order','customer_quote']::text[], 'customer function allowlist');
 select ok(not has_function_privilege('authenticated', 'public.customer_place_order(uuid,uuid,integer,uuid,text,jsonb,text,text,text,text,boolean)', 'execute'), 'merchant cannot execute customer RPC');
 select ok(not has_function_privilege('service_role', 'public.customer_place_order(uuid,uuid,integer,uuid,text,jsonb,text,text,text,text,boolean)', 'execute'), 'service role cannot execute customer RPC');
 select ok(not has_function_privilege('anon', 'public.customer_place_order(uuid,uuid,integer,uuid,text,jsonb,text,text,text,text,boolean)', 'execute'), 'anonymous cannot execute customer RPC');
@@ -215,6 +215,23 @@ select ok('search_path=""'=any(proconfig),'0008 #14 empty search path') from pg_
 select ok(prosecdef,'0008 #14 security definer') from pg_proc where oid='public.customer_get_bill(uuid,uuid,integer,text,text)'::regprocedure;
 select is(has_function_privilege(r,'public.customer_get_bill(uuid,uuid,integer,text,text)','execute'),r='customer_api','0008 #14 execute '||r)
 from (values ('customer_api'),('anon'),('authenticated'),('service_role')) roles(r);
+
+-- 0009: 8 configuration/ACL assertions and 3 behavior assertions.
+select is(provolatile::text,'s','0009 stable') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+select ok(prosecdef,'0009 security definer') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+select ok('search_path=""'=any(proconfig),'0009 empty search path') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+select ok('statement_timeout=3s'=any(proconfig),'0009 timeout') from pg_proc where oid='public.customer_check_replay(uuid,uuid,integer,uuid,text,text)'::regprocedure;
+select is(has_function_privilege(r,'public.customer_check_replay(uuid,uuid,integer,uuid,text,text)','execute'),r='customer_api','0009 execute '||r)
+from (values ('customer_api'),('anon'),('authenticated'),('service_role')) roles(r);
+-- Dedicated committed-order fixture, independent of earlier settlement/cleanup tests.
+insert into public.dining_tables(store_id,label) select store_id,'replay-check' from qr_fixture;
+create temp table replay_fixture as select t.store_id,t.id as table_id,gen_random_uuid() as request_id from public.dining_tables t where label='replay-check';
+select public.customer_place_order(f.store_id,f.table_id,1,f.request_id,repeat('a',64),
+ jsonb_build_array(jsonb_build_object('item_id',x.item_id,'quantity',1,'unit_price_cents',100)),
+ repeat('b',64),repeat('c',64),null,repeat('e',64),true) from replay_fixture f cross join fixture x;
+select is(public.customer_check_replay(store_id,table_id,1,request_id,repeat('a',64),repeat('b',64)), '{"status":"replay"}'::jsonb,'0009 replay') from replay_fixture;
+select is(public.customer_check_replay(store_id,table_id,1,request_id,repeat('f',64),repeat('b',64)), '{"status":"mismatch","code":"IDEMPOTENCY_KEY_REUSED"}'::jsonb,'0009 mismatch') from replay_fixture;
+select is(public.customer_check_replay(store_id,table_id,1,gen_random_uuid(),repeat('a',64),repeat('b',64)), '{"status":"missing"}'::jsonb,'0009 missing') from replay_fixture;
 
 select * from finish();
 rollback;

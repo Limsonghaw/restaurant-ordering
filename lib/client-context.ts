@@ -6,9 +6,15 @@ import { secret } from "./hash";
 export function trustedIp(request: Request): string {
   const ip =
     request.headers.get("x-vercel-forwarded-for") ??
-    (["development", "test"].includes(process.env.NODE_ENV ?? "")
-      ? request.headers.get("x-real-ip")
-      : null);
+    (process.env.NODE_ENV !== "production" &&
+    process.env.VERCEL_ENV !== "production" &&
+    process.env.TRUST_LOCAL_IP === "1"
+      ? (request.headers.get("x-forwarded-for")?.split(",")[0] ??
+        request.headers.get("x-real-ip"))
+      : ["development", "test"].includes(process.env.NODE_ENV ?? "") &&
+          process.env.VERCEL_ENV !== "production"
+        ? request.headers.get("x-real-ip")
+        : null);
   if (!ip || ip.includes("%") || !isIP(ip.trim())) return "unknown";
   const value = ip.trim();
   if (isIP(value) === 4) return value;

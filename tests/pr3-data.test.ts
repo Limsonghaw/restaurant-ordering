@@ -13,10 +13,11 @@ vi.mock("../lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({ rpc: fake.rpc, from: fake.from })),
 }));
 import {
+  customerDatabaseSsl,
   customerGetMenu,
   customerQuote,
   customerPlaceOrder,
-  customerReplayOrder,
+  customerCheckReplay,
   customerGetBill,
   mapCustomerError,
 } from "../lib/supabase/customer";
@@ -201,44 +202,38 @@ const replayArgs = {
   new_bill_token_hash: "d".repeat(64),
   captcha_verified: true,
 };
-it("replay probe commits only a database-confirmed replay and preserves token recovery", async () => {
-  const result = { replayed: true, bill_token_issued: true };
-  fake.query.mockResolvedValue([{ result }]);
-  expect(await customerReplayOrder(replayArgs)).toEqual(result);
-  expect(fake.begin).toHaveBeenCalledOnce();
-  expect(fake.query).toHaveBeenCalledOnce();
-  expect(fake.query.mock.calls[0].at(-1)).toBe(false);
-});
-it("unknown IDs throw inside the transaction, forcing rollback before normal limits", async () => {
-  fake.query.mockResolvedValue([
-    { result: { replayed: false, bill_token_issued: true } },
-  ]);
-  let rollback = false;
-  fake.begin.mockImplementation(
-    async (fn: (tx: unknown) => Promise<unknown>) => {
-      try {
-        return await fn(fake.query);
-      } catch (e) {
-        rollback = true;
-        throw e;
-      }
-    },
-  );
-  expect(await customerReplayOrder(replayArgs)).toBeNull();
-  expect(rollback).toBe(true);
-  expect(fake.query).toHaveBeenCalledOnce();
-});
+it.each(["replay", "missing", "mismatch"])(
+  "read-only replay check returns %s without transactions",
+  async (status) => {
+    const result =
+      status === "mismatch"
+        ? { status, code: "IDEMPOTENCY_KEY_REUSED" }
+        : { status };
+    fake.query.mockResolvedValue([{ result }]);
+    expect(await customerCheckReplay(replayArgs)).toEqual(result);
+    expect(fake.begin).not.toHaveBeenCalled();
+    expect(fake.query.mock.calls[0][0].join("?")).toContain(
+      "public.customer_check_replay",
+    );
+    expect(fake.query.mock.calls[0][0].join("?")).not.toContain(
+      "customer_place_order",
+    );
+  },
+);
 it.each(["CAPTCHA_REQUIRED", "RATE_LIMITED", "IDEMPOTENCY_KEY_REUSED"])(
-  "probe business failure %s cannot authorize a replay",
+  "read-only check business failure %s is propagated",
   async (message) => {
     fake.query.mockRejectedValue({ code: "P0001", message });
-    expect(await customerReplayOrder(replayArgs)).toBeNull();
+    await expect(customerCheckReplay(replayArgs)).rejects.toMatchObject({
+      code: message,
+    });
+    expect(fake.begin).not.toHaveBeenCalled();
   },
 );
 it("probe infrastructure failures fail closed", async () => {
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   fake.query.mockRejectedValue({ code: "57014" });
-  await expect(customerReplayOrder(replayArgs)).rejects.toMatchObject({
+  await expect(customerCheckReplay(replayArgs)).rejects.toMatchObject({
     code: "INTERNAL",
   });
   log.mockRestore();
@@ -258,3 +253,20 @@ it("database retry seconds survive allowlisting but arbitrary details do not", (
     retry_after_seconds: 121,
   });
 });
+
+it.each(["localhost", "127.0.0.1", "[::1]", "database.invalid"])(
+  "SSL disable is restricted to local nonproduction: %s",
+  (host) => {
+    const url = `postgres://placeholder:placeholder@${host}:5432/placeholder`;
+    expect(customerDatabaseSsl(url)).toBe("require");
+    vi.stubEnv("CUSTOMER_DB_SSL", "disable");
+    expect(customerDatabaseSsl(url)).toBe(
+      host === "database.invalid" ? "require" : false,
+    );
+    vi.stubEnv("NODE_ENV", "production");
+    expect(customerDatabaseSsl(url)).toBe("require");
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("VERCEL_ENV", "production");
+    expect(customerDatabaseSsl(url)).toBe("require");
+  },
+);

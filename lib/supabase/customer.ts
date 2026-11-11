@@ -9,13 +9,19 @@ import type {
   TableBill,
 } from "../data/types";
 let sql: ReturnType<typeof postgres> | undefined;
+export function customerDatabaseSsl(url: string): "require" | false {
+  const local = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(new URL(url).hostname);
+  return process.env.CUSTOMER_DB_SSL === "disable" && local &&
+    process.env.NODE_ENV !== "production" && process.env.VERCEL_ENV !== "production"
+    ? false : "require";
+}
 function database() {
   if (!process.env.CUSTOMER_API_DATABASE_URL)
     throw new Error("Missing database configuration");
   return (sql ??= postgres(process.env.CUSTOMER_API_DATABASE_URL, {
     max: 1,
     prepare: false,
-    ssl: "require",
+    ssl: customerDatabaseSsl(process.env.CUSTOMER_API_DATABASE_URL),
     idle_timeout: 20,
     connect_timeout: 5,
   }));
@@ -124,37 +130,15 @@ function placeQuery(db: ReturnType<typeof postgres>, a: PlaceArgs) {
 export const customerPlaceOrder = (a: PlaceArgs) =>
   call<PlaceOrderResult>((db) => placeQuery(db, a));
 
-// Probe using the existing least-privilege RPC, never granting direct table access.
-// Commit ONLY a database-confirmed replay, including legitimate token recovery.
-// Unknown IDs always roll back: no order, token, realtime event or quota is persisted.
-export async function customerReplayOrder(
-  a: PlaceArgs,
-): Promise<PlaceOrderResult | null> {
-  const rollback = new Error("Replay probe rollback");
-  let result: PlaceOrderResult | null = null;
-  try {
-    await database().begin(async (tx) => {
-      const rows = await placeQuery(
-        tx as unknown as ReturnType<typeof postgres>,
-        {
-          ...a,
-          captcha_verified: false,
-        },
-      );
-      const candidate = rows[0].result as PlaceOrderResult;
-      if (candidate.replayed !== true) throw rollback;
-      // The RPC checks current QR, store, table, device and request content first.
-      result = candidate;
-    });
-    return result;
-  } catch (error) {
-    if (error === rollback) return null;
-    // Business rejections are not evidence of replay. Continue through ALL limits.
-    const mapped = mapCustomerError(error);
-    if (mapped.code === "INTERNAL") throw mapped;
-    return null;
-  }
-}
+export type ReplayCheck =
+  | { status: "replay" }
+  | { status: "mismatch"; code: "IDEMPOTENCY_KEY_REUSED" }
+  | { status: "missing" };
+export const customerCheckReplay = (a: Pick<PlaceArgs,
+  "store_id" | "table_id" | "qr_version" | "request_id" | "request_hash" | "device_hash"
+>) => call<ReplayCheck>((db) =>
+  db`select public.customer_check_replay(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${a.device_hash}) as result`
+);
 export const customerGetBill = (
   a: TableCode,
   token: string | null,

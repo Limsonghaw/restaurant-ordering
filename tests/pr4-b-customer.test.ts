@@ -68,19 +68,44 @@ it("maps failed fetch to NETWORK", async () => {
 });
 
 it("preserves customer suspension message and full rate-limit seconds", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
-    { error: { code: "STORE_SUSPENDED", message: "本店暂停服务" } },
-    { status: 403 },
-  )));
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          { error: { code: "STORE_SUSPENDED", message: "本店暂停服务" } },
+          { status: 403 },
+        ),
+      ),
+  );
   await expect(getTableMenu("code")).rejects.toMatchObject({
-    code: "STORE_SUSPENDED", message: "本店暂停服务", status: 403,
+    code: "STORE_SUSPENDED",
+    message: "本店暂停服务",
+    status: 403,
   });
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
-    { error: { code: "RATE_LIMITED", message: "请稍后再试", details: { scope: "ip" } } },
-    { status: 429, headers: { "Retry-After": "600" } },
-  )));
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          {
+            error: {
+              code: "RATE_LIMITED",
+              message: "请稍后再试",
+              details: { scope: "ip" },
+            },
+          },
+          { status: 429, headers: { "Retry-After": "600" } },
+        ),
+      ),
+  );
   await expect(getTableMenu("code")).rejects.toMatchObject({
-    code: "RATE_LIMITED", status: 429, details: { scope: "ip" }, retryAfterSeconds: 600,
+    code: "RATE_LIMITED",
+    status: 429,
+    details: { scope: "ip" },
+    retryAfterSeconds: 600,
   });
 });
 it.each([
@@ -90,8 +115,26 @@ it.each([
 ])("sends only the schema captcha_token field", async (tokens, expected) => {
   const fetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
   vi.stubGlobal("fetch", fetch);
-  await placeOrder("code", { client_request_id: "request", items: [], ...tokens });
+  await placeOrder("code", {
+    client_request_id: "request",
+    items: [],
+    ...tokens,
+  });
   expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
-    client_request_id: "request", items: [], captcha_token: expected,
+    client_request_id: "request",
+    items: [],
+    captcha_token: expected,
+  });
+});
+
+it.each([413, 502, 200])("non-JSON %s retains HTTP status", async (status) => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(new Response("<html>proxy</html>", { status })),
+  );
+  await expect(getTableMenu("code")).rejects.toMatchObject({
+    code: status === 413 ? "PAYLOAD_TOO_LARGE" : "INTERNAL",
+    status,
+    message: status === 413 ? "请求内容超过 16 KB" : "请求失败",
   });
 });

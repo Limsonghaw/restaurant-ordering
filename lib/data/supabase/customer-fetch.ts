@@ -19,7 +19,16 @@ export async function customerFetch<T>(
             }),
       },
     );
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new DataError(
+        (response.status === 413 ? "PAYLOAD_TOO_LARGE" : "INTERNAL") as ErrorCode,
+        response.status === 413 ? "请求内容超过 16 KB" : "请求失败",
+        {}, response.status,
+      );
+    }
     if (!response.ok)
       throw new DataError(
         data.error?.code as ErrorCode,

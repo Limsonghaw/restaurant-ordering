@@ -89,16 +89,15 @@ try {
   await error(() => bill(1,'malformed'),'TABLE_INVALID');
   await error(() => bill(1,'9'.repeat(64)),'TABLE_INVALID');
   await db.exec('rollback to savepoint malformed_stale');
-  // A2 probe safety: even a fully valid unknown ID is rolled back, as are token rotations.
+  // A2: unknown IDs and confirmed replays never write or rotate tokens in the check.
+  const check = request => role(async () => (await q('select customer_check_replay($1,$2,1,$3,$4,$5) result',[store,t.id,request,'f'.repeat(64),D1]))[0].result);
   const request = randomUUID();
-  await db.exec('savepoint probe'); await place(t.id,1,K2,request); await db.exec('rollback to savepoint probe');
+  equal(await check(request),{status:'missing'});
   equal((await q('select count(*)::int n from orders where request_id=$1',[request]))[0].n,0);
   equal((await q('select count(*)::int n from bill_access_tokens where token_hash=$1',[K2]))[0].n,0);
-  await db.exec('savepoint replay_rotation');
-  equal((await place(t.id,1,K2,firstRequest)).replayed,true);
-  equal((await q('select count(*)::int n from bill_access_tokens where token_hash=$1',[K1]))[0].n,0);
-  await db.exec('rollback to savepoint replay_rotation');
+  equal(await check(firstRequest),{status:'replay'});
   equal((await q('select count(*)::int n from bill_access_tokens where token_hash=$1',[K1]))[0].n,1);
+  equal((await place(t.id,1,K2,firstRequest)).bill_token_issued,true);
   equal((await q('select count(*)::int n from orders where request_id=$1',[firstRequest]))[0].n,1);
-  console.log(`PASS bill_qr_rotated: cases 1–14 + A2 rollback, ${assertions} assertions`);
+  console.log(`PASS bill_qr_rotated: cases 1–14 + A2 read-only check, ${assertions} assertions`);
 } finally { await db.close(); }

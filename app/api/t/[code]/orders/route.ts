@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 import { randomBytes } from "node:crypto";
 import {
   customerPlaceOrder,
-  customerReplayOrder,
+  customerCheckReplay,
 } from "../../../../../lib/supabase/customer";
 import { cartBody } from "../../../../../lib/api/schemas";
 import { verifyTurnstile } from "../../../../../lib/turnstile";
@@ -44,8 +44,12 @@ export async function POST(request: Request, context: CustomerRouteContext) {
       new_bill_token_hash: sha256(token),
       captcha_verified: false,
     };
-    let result = await customerReplayOrder(args);
-    if (!result) {
+    const check = await customerCheckReplay(args);
+    if (check.status === "mismatch") throw new AppError(check.code);
+    let result;
+    if (check.status === "replay") {
+      result = await customerPlaceOrder(args);
+    } else {
       let requiredScope: string | undefined;
       for (const [scope, key, detail] of [
         ["orderDeviceMinute", device_hash, "device"],
@@ -72,6 +76,12 @@ export async function POST(request: Request, context: CustomerRouteContext) {
       response.headers.append("Set-Cookie", secureCookie(name, token, 43200));
     return response;
   } catch (e) {
-    return customerError(e, request);
+    const response = await customerError(e, request);
+    if (e instanceof AppError && e.code === "INTERNAL")
+      return new Response(response.body, {
+        status: 503,
+        headers: response.headers,
+      });
+    return response;
   }
 }
