@@ -2,7 +2,7 @@
 
 本文说明如何在 Windows 上用 Docker Desktop（WSL2）启动本仓库的本地 Supabase，再以 `npm run dev` 连接真实数据层，验证扫码下单和店家后台。命令一律在 **PowerShell** 中执行，并先 `cd` 到仓库根目录。
 
-不要用 `npm start`（即 `next start`）：它会按 production 运行（`NODE_ENV=production`），进程会拒绝 `CUSTOMER_DB_SSL=disable` 和 `TRUST_LOCAL_IP`，也读不到本地 IP 头。本地请只用 `npm run dev`（`next dev`）。
+不要用 `npm start`（即 `next start`）：它会按 production 运行（`NODE_ENV=production`），进程会拒绝 `CUSTOMER_DB_SSL=disable`、`TRUST_LOCAL_IP` 和 `LOCAL_MEMORY_RATE_LIMIT=1`，也读不到本地 IP 头。本地请只用 `npm run dev`（`next dev`）。`LOCAL_MEMORY_RATE_LIMIT` 只用于本机，不能配到 Vercel（包括 production 和 preview）：只要该开关为 `1`，且 `NODE_ENV=production` 或设置了 `VERCEL_ENV`（含 production、preview），进程会直接报错退出，不会静默忽略，也不会退回成不限流。
 
 本说明对应已合并 PR #12 的 main（`c03f95d`，含设置页 logo 上传；迁移至 `0009_customer_check_replay.sql`）。密钥只放在本机 `.env.local`，不要提交，也不要把真实生产密钥写进本文或仓库。
 
@@ -103,7 +103,15 @@ npx supabase db reset --local
 
 顾客接口通过 `CUSTOMER_API_DATABASE_URL` 以数据库角色 `customer_api` 连接。迁移会创建该登录角色，但 **密码不会写进迁移**，每个环境要自己设置。
 
-在本机生成一段只含十六进制字符的密码（避免引号和 URL 编码问题），不要提交：
+推荐在已经 `Copy-Item .env.example .env.local`（见第 5 节）并完成 `npx supabase start` 之后，执行：
+
+```powershell
+npm run db:local-customer-password
+```
+
+脚本会生成一段只含十六进制字符的随机密码（也可用环境变量 `CUSTOMER_API_PASSWORD` 指定，同样只能是字母或数字），在本地库执行 `alter role customer_api`，并把 `CUSTOMER_API_DATABASE_URL` 写进本机 `.env.local`（该文件已被 gitignore，不要提交）。若还没有 `.env.local`，终端会打印连接串，请自行拷入，不要贴到聊天或提交。
+
+也可以手动设置：
 
 ```powershell
 $customerApiPassword = node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -140,7 +148,8 @@ Copy-Item .env.example .env.local
 | `TWILIO_ACCOUNT_SID` | 本地留空（`config.toml` 里 Twilio Verify 为 `enabled = false`） |
 | `TWILIO_VERIFY_SERVICE_SID` | 本地留空 |
 | `TWILIO_AUTH_TOKEN` | 本地留空 |
-| `UPSTASH_REDIS_REST_URL` | 见第 6 节；完整走通顾客流程时必填 |
+| `LOCAL_MEMORY_RATE_LIMIT` | 本地完整走通顾客流程、又不想注册 Upstash 时设为 `1`（必须显式写成 `1`，默认关闭）。只用于本机 `npm run dev`，**不要写进 Vercel 环境变量**。`NODE_ENV=production` 或设置了 `VERCEL_ENV`（production / preview 等）时，只要开关为 `1` 就会直接报错，不会静默忽略或取消限流。已同时配置 Upstash 两项时仍走 Upstash，不启用内存限流 |
+| `UPSTASH_REDIS_REST_URL` | 本地可留空；若填写则必须与下一行同时配置，此时走 Upstash 而不走内存限流 |
 | `UPSTASH_REDIS_REST_TOKEN` | 与上一行同时配置，缺一不可 |
 
 改完 `.env.local` 后若 dev 已在跑，需要停掉再执行 `npm run dev`，公开变量才会生效。
@@ -157,27 +166,25 @@ Copy-Item .env.example .env.local
 
 服务端 `TURNSTILE_SECRET_KEY` 请使用 Cloudflare 官方测试 secret。本地推荐与「总是通过」site key 配对的 `1x0000000000000000000000000000000AA`。这些是 Cloudflare 公开测试凭据，不是本项目的生产密钥，**只用于本地或预览测试**。
 
-没配 Upstash 时，下单接口会一律要求人机验证，所以上述测试 key 是走通本地下单所必需的（同时仍须配置 Upstash，否则菜单/报价/账单会 429，见下节）。
+本地推荐打开 `LOCAL_MEMORY_RATE_LIMIT=1`（见下节），这样菜单、报价、账单和下单的限流阈值与 Upstash 版相同，不必再注册 Redis。即便如此，下单路径仍会校验 Turnstile（测试 secret 也要配对）；只用 always-pass 测试 secret 才会跳过 `cData` 检查，见下。
 
 代码只对这一个官方 always-pass secret（`1x0000000000000000000000000000000AA`）跳过 `cData`（桌号 + `client_request_id`）绑定检查；其它测试 secret 不会跳过。即便使用 always-pass secret，仍会校验 `action === place_order` 以及返回的 hostname 是否等于 `NEXT_PUBLIC_SITE_URL` 的主机名。因此本地必须是 `http://localhost:3000`，并在浏览器用这个地址打开，不要改用 `127.0.0.1:3000`。跳过 cData 检查只为方便本地测试，不能用于生产。
 
 本地 Auth 的 `[auth.captcha] enabled = false`，GoTrue 不会校验注册/登录验证码；但前端在 supabase 模式下仍要有效的 site key 才能得到令牌。
 
-### Upstash
+### 本地内存限流（不要配到 Vercel）
 
-运行时限流固定走 `RedisRateLimiter`（Upstash Redis REST）。仓库里的 `MemoryRateLimiter` 只给测试使用，**没有**「本地改用内存限流」的环境变量开关。
+本地完整走通第 8 节的扫码下单，**不必注册 Upstash 账号**。在 `.env.local` 设置 `LOCAL_MEMORY_RATE_LIMIT=1`，并保持 `UPSTASH_REDIS_REST_URL` 与 `UPSTASH_REDIS_REST_TOKEN` 为空，限流会改用进程内的 `MemoryRateLimiter`。阈值和调用顺序与 Upstash 版相同（例如菜单 60 次/分钟、报价 30 次/分钟；下单时 `orderProbe` 仍在 `customer_check_replay` 之前）。Turnstile 校验和数据库层的限流（`table_db`、`device_db`、`ip_db`）不会因为这个开关变弱。
 
-`.env.example` 写明：`UPSTASH_REDIS_REST_URL` 与 `UPSTASH_REDIS_REST_TOKEN` 必须同时有值。缺失或故障时：
+注意：
 
-- **下单**会要求 Turnstile；
-- **菜单、报价、账单**等其它顾客接口会返回 429。
+- 必须显式设为 `1` 才生效，默认关闭。`.env.example` 里只是注释，复制后不会自动打开，需要自己在 `.env.local` 写上。
+- **只用于本机**。不要把这个变量配到 Vercel，也不要在托管环境打开。只要开关为 `1`，且 `NODE_ENV=production` 或设置了 `VERCEL_ENV`（包括 `production` 和 `preview`），启动时会直接报错退出；不会静默忽略该开关，也不会退回成不限流。
+- 内存计数只存在于当前 `npm run dev` 进程里，重启后清零，多进程之间不共享。这只适合单机开发。
+- 若 `.env.local` 里同时填了 Upstash 两项，仍走 Upstash，不启用内存限流。
+- 开关关闭且未配置 Upstash 时，行为与原来一样：**下单**在限流不可用时会要求 Turnstile；**菜单、报价、账单**等其它顾客接口会返回 429，无法完成第 8 节清单。
 
-因此不配 Upstash 时，无法完成第 8 节的「扫码下单」清单。本地替代是：
-
-1. 使用 Upstash 免费档 Redis（REST URL + TOKEN），只写入本机 `.env.local`，不要用生产实例、不要提交；或
-2. 暂时留空，则只能调试店家登录等不经过上述顾客限流的页面，不能完整下单。
-
-没有可在本仓库直接启动的本地 Upstash 兼容服务。
+改完该变量后须重启 `npm run dev`。
 
 ## 7. 启动前端
 
@@ -201,7 +208,7 @@ npm run dev
 3. **扫码下单**
    - 顾客页应能看到菜单。若还没有菜，先到 **菜单**（`/store/menu`）建分类和菜品，再刷新顾客页。
    - 加购、确认报价、完成 Turnstile（测试 key 会自动通过）、下单成功。
-   - 若菜单一加载就 429：检查 Upstash 两项是否都已填写，并已重启 `npm run dev`。
+   - 若菜单一加载就 429：检查 `.env.local` 是否已设 `LOCAL_MEMORY_RATE_LIMIT=1`（或同时填写了有效的 Upstash 两项），并已重启 `npm run dev`。不要把该开关配到 Vercel。
 4. **店家实时订单**
    - 打开 **实时订单**（`/store/live`），应出现刚才的新订单，并可接单/上菜。若页面一直断开，确认 `npx supabase start` 没有排除 Realtime，且 `.env.local` 的 `NEXT_PUBLIC_SUPABASE_URL` 与 status 的 API URL 一致（页面会按该地址连 WebSocket）。
 5. **账单**
@@ -231,7 +238,7 @@ npx supabase stop --no-backup
 npx supabase db reset --local
 ```
 
-然后按第 4 节再执行一次 `alter role customer_api …`。若密码与 `.env.local` 里已有值相同，连接串不用改。
+然后按第 4 节再执行一次 `npm run db:local-customer-password`（或手动 `alter role customer_api …`）。若密码与 `.env.local` 里已有值相同，连接串不用改。
 
 `.env.local` 不会被上述命令删除。不要用仓库里的「重置全部假数据」（那只作用于 mock）。
 
@@ -248,11 +255,11 @@ npx supabase db reset --local
 | `Missing server configuration` | 未填 `QR_SIGNING_SECRET`、`CLIENT_HASH_SECRET` 或 `DEVICE_COOKIE_SECRET`。 |
 | 页面显示「验证组件未配置」 | supabase 模式下必须配置 `NEXT_PUBLIC_TURNSTILE_SITE_KEY`。 |
 | 下单 `CAPTCHA_FAILED` | 检查测试 secret 是否与 site key 配对；用 `http://localhost:3000` 打开而不是 `127.0.0.1`；`NEXT_PUBLIC_SITE_URL` 须为 `http://localhost:3000`。 |
-| 菜单 / 报价 / 账单 429，或一打开顾客页就失败 | 未同时配置 Upstash 两项，或 REST URL/TOKEN 无效。 |
+| 菜单 / 报价 / 账单 429，或一打开顾客页就失败 | 本地应设 `LOCAL_MEMORY_RATE_LIMIT=1` 并重启 `npm run dev`；或同时配置有效的 Upstash 两项。开关关闭且未配 Upstash 时，这些接口会 429。不要把该开关配到 Vercel。 |
 | 注册收不到邮件 | 到 `npx supabase status` 列出的本地邮箱界面查看，不要等真实 SMTP。本地短信注册是关闭的。 |
 | 登录后没有店铺 / 桌位是空的 | 预期现象：没有种子数据。需自己注册并在桌位页建桌。 |
 | 实时订单不更新 | 用完整 `npx supabase start`（不要 `-x realtime`）；检查浏览器能否连到 API 的 WebSocket。 |
-| 正式感的报错：「生产环境必须配置正式 Turnstile…」或不能关 SSL | 不要用 `npm start`，不要在本机 `.env.local` 设置 `VERCEL_ENV`。 |
+| 正式感的报错：「生产环境必须配置正式 Turnstile…」、不能关 SSL，或提示 `LOCAL_MEMORY_RATE_LIMIT is local-only` | 不要用 `npm start`，不要在本机 `.env.local` 设置 `VERCEL_ENV`。`LOCAL_MEMORY_RATE_LIMIT` 只能用于本地，不能配到 Vercel。 |
 | `NEXT_PUBLIC_DATA_SOURCE 必须明确设置为 mock 或 supabase` | `.env.local` 未生效或拼写错误，改完后重启 `npm run dev`。 |
 | 设置页或菜单上传图片失败 | 确认用了完整 `npx supabase start`（含 Storage），文件为 JPG/PNG/WebP 且不超过 2 MB。对象应出现在 Studio → Storage → `menu-images`。 |
 | 本地 IP 限流测不出来 / 所有人共用限额 | 直接访问 `next dev` 时 IP 常为 `unknown`。要测按 IP 的限流，在 `.env.local` 设 `TRUST_LOCAL_IP=1` 并重启 `npm run dev`，再用带 `X-Forwarded-For` 的请求。不要在生产环境设置该变量。 |
