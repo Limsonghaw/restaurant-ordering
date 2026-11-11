@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PHASE_DEVELOPMENT_SERVER,
@@ -143,4 +144,12 @@ it("L-2 保留安全响应头和 CSP，关闭框架头", async () => {
   expect(
     headers.find((h) => h.key === "Content-Security-Policy")?.value,
   ).toContain("frame-ancestors 'none'");
+});
+
+it("supabase 首页不展示假数据入口，mock 首页保留示范店", () => {
+  const source = readFileSync("app/page.tsx", "utf8");
+  expect(source).toContain('process.env.NEXT_PUBLIC_DATA_SOURCE === "mock"');
+  expect(source).toContain("请扫描桌上的二维码开始点餐");
+  expect(source).toContain("欢迎来到假数据预览");
+  expect(source).toContain("进入示范茶餐室");
 });

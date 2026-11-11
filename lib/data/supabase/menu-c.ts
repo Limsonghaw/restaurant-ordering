@@ -2,7 +2,7 @@ import type * as Mock from "../mock/menu-c";
 import type { ItemInput, StoreMenu } from "../types";
 import { getClient, storeContext } from "./me";
 import { dataError, result } from "./pg-errors";
-import { uploadItemImage as uploadImage } from "./images";
+import { uploadItemImage as uploadImage, uploadLogo as uploadStoreLogo } from "./images";
 
 const categoryColumns = "id,name,sort_order,is_hidden";
 const itemColumns = "id,category_id,name,description,price_cents,image_path,thumb_path,is_sold_out,is_hidden,sort_order";
@@ -61,3 +61,4 @@ export const setItemSoldOut: typeof Mock.setItemSoldOut = async (id, value) => u
 export const setItemHidden: typeof Mock.setItemHidden = async (id, value) => updateRow("items", id, { is_hidden: value });
 export const deleteItem: typeof Mock.deleteItem = async id => { await result((await getClient()).rpc("soft_delete_item", { p_item_id: id })); };
 export const uploadItemImage: typeof Mock.uploadItemImage = uploadImage;
+export const uploadLogo: typeof Mock.uploadLogo = uploadStoreLogo;

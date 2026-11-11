@@ -343,6 +343,20 @@ describe("PR-C 过期与权限边界", () => {
         ),
       ),
     ).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
+    await expect(
+      finish(
+        d.uploadLogo(new File(["GIF89a"], "fake.png", { type: "image/png" })),
+      ),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_FILE_TYPE" });
+    await expect(
+      finish(
+        d.uploadLogo(
+          new File([new Uint8Array(2097153)], "big.jpg", {
+            type: "image/jpeg",
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
     expect(await finish(d.blockClientFromOrder("store-0-order-2"))).toEqual({
       blocked: true,
       cancelled: true,
