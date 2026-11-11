@@ -2,12 +2,16 @@ import * as mock from "./mock/store-d";
 import * as bills from "./bills";
 import * as tables from "./tables";
 import * as store from "./store";
+import { getStoreTableQrLinks as loadStoreTableQrLinks } from "./supabase/table-qr";
+import { getStoreHistory as loadStoreHistory } from "./supabase/history";
 import {
   DataError,
   type StoreBillFilters,
   type StoreBillDetail,
   type StoreBillPage,
   type StoreProfilePatch,
+  type TableQrLink,
+  type StoreHistory,
 } from "./types";
 const unavailable = async (): Promise<never> => {
   throw new DataError("NOT_IMPLEMENTED", "未实现");
@@ -59,8 +63,10 @@ const real = {
     await store.updateStore(patch);
     return store.getStore();
   },
-  getStoreTableQrLinks: unavailable,
-  getStoreHistory: unavailable,
+  getStoreTableQrLinks: (ids: string[]): Promise<TableQrLink[]> =>
+    loadStoreTableQrLinks(ids),
+  getStoreHistory: (date: string): Promise<StoreHistory> =>
+    loadStoreHistory(date),
   storeMockActionD: unavailable,
   checkoutMockBill: unavailable,
 } satisfies typeof mock;
