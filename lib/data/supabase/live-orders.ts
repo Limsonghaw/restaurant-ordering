@@ -15,32 +15,56 @@ async function ordersQuery() {
 }
 export async function listLiveOrders(): Promise<LiveOrder[]> {
   const { client, id } = await ordersQuery();
-  return result(
-    client
+  const rows: LiveOrder[] = [];
+  let cursor: LiveOrder | undefined;
+  for (;;) {
+    let query = client
       .from("orders")
       .select(ORDER_COLUMNS)
       .eq("store_id", id)
-      .in("status", ["new", "accepted"])
-      .order("created_at")
-      .order("id")
-      .returns<LiveOrder[]>(),
-  );
+      .in("status", ["new", "accepted"]);
+    if (cursor)
+      query = query.or(
+        `created_at.gt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.gt.${cursor.id})`,
+      );
+    const page = await result<LiveOrder[]>(
+      query.order("created_at").order("id").limit(500).returns<LiveOrder[]>(),
+    );
+    rows.push(...page);
+    if (page.length < 500) return rows;
+    cursor = page[page.length - 1];
+  }
 }
 export async function listServedToday(): Promise<LiveOrder[]> {
   const { client, id } = await ordersQuery();
   const { start, end } = malaysiaDay();
-  return result(
-    client
+  const rows: LiveOrder[] = [];
+  let cursor: LiveOrder | undefined;
+  for (;;) {
+    let query = client
       .from("orders")
       .select(ORDER_COLUMNS)
       .eq("store_id", id)
       .eq("status", "served")
       .gte("served_at", new Date(start).toISOString())
-      .lt("served_at", new Date(end).toISOString())
-      .order("served_at", { ascending: false })
-      .order("id")
-      .returns<LiveOrder[]>(),
-  );
+      .lt("served_at", new Date(end).toISOString());
+    if (cursor?.served_at)
+      query = query.or(
+        `served_at.lt.${cursor.served_at},and(served_at.eq.${cursor.served_at},id.gt.${cursor.id})`,
+      );
+    const page = await result<LiveOrder[]>(
+      query
+        .order("served_at", { ascending: false })
+        .order("id")
+        .limit(500)
+        .returns<LiveOrder[]>(),
+    );
+    rows.push(...page);
+    if (page.length < 500) return rows;
+    const last = page[page.length - 1];
+    if (!last.served_at) throw dataError("VALIDATION_FAILED");
+    cursor = last;
+  }
 }
 export async function fetchOrdersUpdatedSince(
   since: string,
