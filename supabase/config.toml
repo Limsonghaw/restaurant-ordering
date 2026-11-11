@@ -68,3 +68,10 @@ content_path = "./supabase/templates/recovery.html"
 content_path = "./supabase/templates/email_change.html"
 [auth.email.template.reauthentication]
 content_path = "./supabase/templates/reauthentication.html"
+
+# Enable only after supplying credentials. Disabled keeps local start secret-free.
+[auth.sms.twilio_verify]
+enabled = false
+account_sid = "env(TWILIO_ACCOUNT_SID)"
+message_service_sid = "env(TWILIO_VERIFY_SERVICE_SID)"
+auth_token = "env(TWILIO_AUTH_TOKEN)"

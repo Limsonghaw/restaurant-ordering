@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MyContext, StoreStatus } from "../data/types";
 import { safeNext } from "./safe-next";
 export type AuthState =
@@ -65,4 +66,18 @@ export function evaluateAccess(
     case "ready":
       return admin || p === "/verify" ? redirect("/store") : { allow: true };
   }
+}
+
+export async function getAuthState(
+  supabase: SupabaseClient,
+): Promise<AuthState> {
+  const { data, error } = await supabase.auth.getClaims();
+  if (error) {
+    if (error.name === "AuthSessionMissingError") return { kind: "anonymous" };
+    throw error;
+  }
+  if (!data?.claims) return { kind: "anonymous" };
+  const context = await supabase.rpc("get_my_context");
+  if (context.error) throw context.error;
+  return toAuthState(context.data as MyContext | null);
 }
