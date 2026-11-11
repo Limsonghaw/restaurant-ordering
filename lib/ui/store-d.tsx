@@ -87,26 +87,6 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
   const serial = useRef(0);
   const accessVersion = useRef(0);
   const accessKey = useRef("");
-  useEffect(() => {
-    const version = accessVersion;
-    let active = true;
-    const unsubscribe = onSessionChange((s) => {
-      if (!active) return;
-      const key = JSON.stringify([s?.user_id, s?.store?.id, s?.store?.status]);
-      if (key !== accessKey.current) {
-        accessKey.current = key;
-        accessVersion.current++;
-        serial.current++;
-        setLoading(false);
-        setSuspended(s?.store?.status === "suspended");
-      }
-    });
-    return () => {
-      active = false;
-      version.current++;
-      unsubscribe();
-    };
-  }, []);
   const load = useCallback(() => {
     const id = ++serial.current;
     setLoading(true);
@@ -129,6 +109,28 @@ function useStoreResource<T>(fetcher: () => Promise<T>) {
         if (id === serial.current) setLoading(false);
       });
   }, [fetcher]);
+  useEffect(() => {
+    const version = accessVersion;
+    let active = true;
+    const unsubscribe = onSessionChange((s) => {
+      if (!active) return;
+      const key = JSON.stringify([s?.user_id, s?.store?.id, s?.store?.status]);
+      if (accessKey.current === "") {
+        accessKey.current = key;
+        setSuspended(s?.store?.status === "suspended");
+      } else if (key !== accessKey.current) {
+        accessKey.current = key;
+        accessVersion.current++;
+        load();
+        setSuspended(s?.store?.status === "suspended");
+      }
+    });
+    return () => {
+      active = false;
+      version.current++;
+      unsubscribe();
+    };
+  }, [load]);
   useEffect(() => {
     const version = serial;
     let disposed = false;

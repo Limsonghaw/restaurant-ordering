@@ -62,7 +62,8 @@ const real = {
   getStoreTableQrLinks: unavailable,
   getStoreHistory: unavailable,
   storeMockActionD: unavailable,
-};
+  checkoutMockBill: unavailable,
+} satisfies typeof mock;
 export const {
   setStoreTableActive,
   listStoreBills,

@@ -922,4 +922,4 @@ label:has(.upload-input):focus-within {
 }
 
 .d-bill-placeholder { display: none; }
-@media (min-width: 820px) { .d-bills > .d-bill-placeholder { display: block; grid-column: 2; grid-row: 2 / span 8; padding: 24px; color: var(--muted); } }
+@media (min-width: 768px) { .d-bills > .d-bill-placeholder { display: block; grid-column: 2; grid-row: 2 / span 8; padding: 24px; color: var(--muted); } }
