@@ -223,7 +223,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ```
 
-对应 `package.json` 的 `dev` 脚本（`next dev`），默认 [http://localhost:3000](http://localhost:3000)。请用 `http://localhost:3000` 打开，以便和 `NEXT_PUBLIC_SITE_URL`、Auth `site_url` 一致。
+对应 `package.json` 的 `dev` 脚本（`next dev`），默认 [http://localhost:3000](http://localhost:3000)。请用 `http://localhost:3000` 打开，以便和 `NEXT_PUBLIC_SITE_URL`、Auth `site_url` 一致。Windows 上请在独立的 PowerShell 窗口里前台运行 `npm run dev`；放到后台会卡住。
 
 ## 8. 逐项验证清单
 

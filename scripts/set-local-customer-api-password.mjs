@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { npxInvocation } from "./npx-command.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = join(root, ".env.local");
@@ -29,10 +30,13 @@ if (!/^[A-Za-z0-9]+$/.test(password)) {
 // Pipe SQL on stdin so the password is not visible in the process command line.
 // `supabase db query` in CLI 2.122.1 accepts piped stdin when --file and a
 // positional SQL argument are omitted.
-execFileSync("npx", ["supabase", "db", "query", "--local"], {
+// Windows: use npx.cmd and shell:true (CVE-2024-27980). Args are constants.
+const npx = npxInvocation();
+execFileSync(npx.command, npx.args, {
   cwd: root,
   input: `alter role customer_api with password '${password}';\n`,
   stdio: ["pipe", "inherit", "inherit"],
+  shell: npx.shell,
 });
 const url = `postgresql://customer_api:${password}@127.0.0.1:54322/postgres`;
 const current = readFileSync(envPath, "utf8");

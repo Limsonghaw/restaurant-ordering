@@ -303,6 +303,9 @@ it("quote preserves estimates/limit fields and rejects malformed bodies and abse
       await quote(req({ items: [{ ...items[0], quantity: 0 }] }), context()),
     ),
   ).toBe("VALIDATION_FAILED");
+  expect(await err(await quote(req({ items: [] }), context()))).toBe(
+    "VALIDATION_FAILED",
+  );
   expect(
     await err(
       await order(req(body(), { cookie: "", "X-Device-Id": did }), context()),
