@@ -16,7 +16,14 @@ import {
   type TableBill,
 } from "../data";
 import { addCartLine, readCart, writeCart } from "../cart";
-import { errorMessage, formatMoney, formatTime, cancelLabels } from "../format";
+import { requestCartQuote, shouldRequestQuote } from "../customer-quote";
+import {
+  errorMessage,
+  quoteErrorMessage,
+  formatMoney,
+  formatTime,
+  cancelLabels,
+} from "../format";
 import { routes } from "../routes";
 import {
   useCountdown,
@@ -98,16 +105,38 @@ function useCart(code: string) {
   );
   return { cart, update, ready };
 }
-function useQuote(code: string, cart: CartItem[], ready: boolean) {
+function useQuote(
+  code: string,
+  cart: CartItem[],
+  cartReady: boolean,
+  menuLoaded: boolean,
+) {
   const [value, setValue] = useState<CartQuote>();
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const serial = useRef(0);
+  const ready = cartReady && menuLoaded;
   const refresh = useCallback(async () => {
     const id = ++serial.current;
+    // Empty cart: show 0 locally and clear any previous quote error. Do not
+    // call POST /quote (backend requires items.length >= 1).
+    if (!shouldRequestQuote(cartReady, menuLoaded, cart)) {
+      if (!cart.length) {
+        const empty = await requestCartQuote(code, cart, quoteCart);
+        if (id === serial.current) {
+          setValue(empty);
+          setError(undefined);
+          setBusy(false);
+        }
+        return empty;
+      }
+      // Cart has items but the menu GET (which issues the did cookie) has not
+      // finished yet; wait rather than racing and getting VALIDATION_FAILED.
+      return undefined;
+    }
     setBusy(true);
     try {
-      const q = await quoteCart(code, cart);
+      const q = await requestCartQuote(code, cart, quoteCart);
       if (id === serial.current) {
         setValue(q);
         setError(undefined);
@@ -119,14 +148,15 @@ function useQuote(code: string, cart: CartItem[], ready: boolean) {
     } finally {
       if (id === serial.current) setBusy(false);
     }
-  }, [code, cart]);
+  }, [code, cart, cartReady, menuLoaded]);
   useEffect(() => {
     const requestSerial = serial;
-    if (ready) void Promise.resolve().then(refresh);
+    if (ready || (cartReady && !cart.length))
+      void Promise.resolve().then(refresh);
     return () => {
       requestSerial.current++;
     };
-  }, [refresh, ready]);
+  }, [refresh, ready, cartReady, cart.length]);
   return { value, error, busy, refresh };
 }
 export function MenuPage({ code }: { code: string }) {
@@ -139,7 +169,7 @@ export function MenuPage({ code }: { code: string }) {
   const [toast, setToast] = useState("");
   const [remove, setRemove] = useState<number>();
   const { cart, update, ready } = useCart(code);
-  const quote = useQuote(code, cart, ready);
+  const quote = useQuote(code, cart, ready, Boolean(menu));
   const seconds = useCountdown(error);
   const load = useCallback(async () => {
     setLoading(true);
@@ -362,7 +392,7 @@ export function MenuPage({ code }: { code: string }) {
               </Button>
             }
           >
-            {errorMessage(quote.error)}
+            {quoteErrorMessage(quote.error)}
           </Banner>
         )}
       </main>
@@ -481,7 +511,9 @@ function ItemDetail({
           value={note}
           onChange={setNote}
         />
-        {Boolean(error) && <Banner tone="red">{errorMessage(error)}</Banner>}
+        {Boolean(error) && (
+          <Banner tone="red">{quoteErrorMessage(error)}</Banner>
+        )}
         <Button
           disabled={disabled || !q || Boolean(error)}
           onClick={() => onAdd(item, quantity, note)}
@@ -496,8 +528,8 @@ function ItemDetail({
 export function CartPage({ code }: { code: string }) {
   const router = useRouter();
   const { cart, update, ready } = useCart(code);
-  const quote = useQuote(code, cart, ready);
   const [menu, setMenu] = useState<TableMenu>();
+  const quote = useQuote(code, cart, ready, Boolean(menu));
   const [error, setError] = useState<unknown>();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -651,9 +683,11 @@ export function CartPage({ code }: { code: string }) {
     ? `下单太频繁，请 ${seconds} 秒后再试`
     : error instanceof DataError && error.code === "NETWORK"
       ? "下单没有成功，购物车已保留，请重试"
-      : effectiveError
-        ? errorMessage(effectiveError)
-        : "";
+      : error
+        ? errorMessage(error)
+        : quote.error
+          ? quoteErrorMessage(quote.error)
+          : "";
   return (
     <>
       <Header menu={menu} code={code} cart />
@@ -691,7 +725,7 @@ export function CartPage({ code }: { code: string }) {
             {!q ? (
               quote.error ? (
                 <ErrorState
-                  message={errorMessage(quote.error)}
+                  message={quoteErrorMessage(quote.error)}
                   retry={() => void quote.refresh()}
                 />
               ) : (

@@ -22,24 +22,31 @@ export const cancelLabels: Record<CancelReason, string> = {
   other: "其他",
 };
 export const storeLabels = { active: "正常", suspended: "已停用" };
+const errorMessages: Record<string, string> = {
+  TABLE_INVALID: "这个二维码已失效，请联系店员",
+  STORE_SUSPENDED: "本店暂停服务",
+  NETWORK: "网络出错，请检查网络后重试",
+  DEVICE_BLOCKED: "暂时无法在这台手机下单，请联系店员",
+  STORE_CLOSED: "暂停接单",
+  ORDER_LIMIT_EXCEEDED: "单张订单最多 RM 3,000（或 200 件），请分开下单",
+  PRICE_CHANGED: "价格已更新，请确认后再下单",
+  ITEM_UNAVAILABLE: "有菜品刚售完，请移除后再下单",
+  CAPTCHA_FAILED: "人机验证没有通过，请再试一次",
+  CAPTCHA_REQUIRED: "请先完成人机验证",
+  IDEMPOTENCY_KEY_REUSED: "请重新确认下单",
+  PAYLOAD_TOO_LARGE: "订单内容过多，请减少菜品后再下单",
+};
+const genericErrorMessage = "操作没有成功，请稍后再试";
 export function errorMessage(error: unknown) {
-  const messages: Record<string, string> = {
-    TABLE_INVALID: "这个二维码已失效，请联系店员",
-    STORE_SUSPENDED: "本店暂停服务",
-    NETWORK: "网络出错，请检查网络后重试",
-    DEVICE_BLOCKED: "暂时无法在这台手机下单，请联系店员",
-    STORE_CLOSED: "暂停接单",
-    ORDER_LIMIT_EXCEEDED: "单张订单最多 RM 3,000（或 200 件），请分开下单",
-    PRICE_CHANGED: "价格已更新，请确认后再下单",
-    ITEM_UNAVAILABLE: "有菜品刚售完，请移除后再下单",
-    CAPTCHA_FAILED: "人机验证没有通过，请再试一次",
-    CAPTCHA_REQUIRED: "请先完成人机验证",
-    IDEMPOTENCY_KEY_REUSED: "请重新确认下单",
-    PAYLOAD_TOO_LARGE: "订单内容过多，请减少菜品后再下单",
-  };
-  return error instanceof DataError && Object.hasOwn(messages, error.code)
-    ? messages[error.code]
-    : "操作没有成功，请稍后再试";
+  return error instanceof DataError && Object.hasOwn(errorMessages, error.code)
+    ? errorMessages[error.code]
+    : genericErrorMessage;
+}
+/** Quote failures should not use the scary generic copy; known codes stay specific. */
+export function quoteErrorMessage(error: unknown) {
+  return error instanceof DataError && Object.hasOwn(errorMessages, error.code)
+    ? errorMessages[error.code]
+    : "暂时无法计算金额，请重试";
 }
 
 export const goneMessages = {
