@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { PHASE_PRODUCTION_BUILD } from "next/constants.js";
 
 const supabaseOrigin = process.env.NEXT_PUBLIC_SUPABASE_URL
   ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin
@@ -68,3 +68,4 @@ export default function config(phase: string): NextConfig {
   }
   return nextConfig;
 }
+
