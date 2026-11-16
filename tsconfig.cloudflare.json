@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ],
+    "plugins": []
+  },
+  "include": [
+    "vite.config.ts",
+    "cloudflare.config.ts",
+    ".cloudflare/types"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

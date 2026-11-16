@@ -2,10 +2,13 @@ import { isNonLocalEnv } from "./env";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { secret } from "./hash";
-// Production supports Vercel only: it overwrites x-vercel-forwarded-for.
+// Trust platform-owned IP headers only when the deployment platform is configured.
 // Never trust client-supplied x-real-ip outside local development/tests.
 export function trustedIp(request: Request): string {
   const ip =
+    (process.env.DEPLOYMENT_PLATFORM === "cloudflare"
+      ? request.headers.get("cf-connecting-ip")
+      : null) ??
     (process.env.VERCEL === "1"
       ? request.headers.get("x-vercel-forwarded-for")
       : null) ??
