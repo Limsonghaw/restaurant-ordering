@@ -1,10 +1,66 @@
-# 餐厅扫码点餐
+# Restaurant QR Ordering
 
-面向多店的餐厅扫码点餐 SaaS。当前提供 Next.js App Router、TypeScript strict、Tailwind CSS、Supabase 客户端工厂及基础 CI，首页为简体中文占位页面。
+A table-side QR ordering prototype for restaurants. Customers scan a QR code on the table to browse the menu and place orders. Store staff manage the menu, live orders, tables, and bills from a back-office console.
 
-## 本地启动
+The interface is in Simplified Chinese. Prices use Malaysian Ringgit (MYR), including optional service charge and SST.
 
-使用 Node.js 22+（当前 Supabase SDK 的最低要求） 和 npm，推荐 Node.js 24（与 CI 一致）。
+## Live demo
+
+[https://songhaw-ordering.s020611h.workers.dev](https://songhaw-ordering.s020611h.workers.dev)
+
+The hosted site runs on Cloudflare Workers and uses the Supabase data source. The home page asks you to scan a table QR code, or you can open the store console (login required).
+
+The in-browser mock tables such as `/t/demo-a1` work only in local mock mode, not on this hosted site.
+
+## Features
+
+**Customer**
+
+- Open a table menu by scanning that table's QR code (`/t/[code]`)
+- Browse and search dishes by category, including sold-out and hidden items
+- Add items to a cart, with optional notes, then review a price quote (subtotal, service charge, SST)
+- Place an order and follow its status: waiting for staff confirmation, accepted, or served
+
+**Store console**
+
+- Register and log in with email or a Malaysian phone number, and reset a password
+- Live order board, with realtime updates: accept an order, mark it served, cancel it, or reject it and block the device; pause or resume accepting orders
+- Menu management: categories and dishes, hide or mark sold out, reorder, and upload images
+- Tables and QR codes: add, rename, enable, disable, or delete tables; rotate a table QR; download or print QR codes
+- Bills: review open and paid bills, and mark a table as paid (this clears the table)
+- Order history and daily totals
+- Store settings: name, logo, address, opening hours, whether the store is accepting orders, service charge, and SST
+- Blocked-client list (device or IP), with the option to unblock
+
+## Tech stack
+
+- Next.js, React, and TypeScript
+- Tailwind CSS
+- Supabase (Postgres, Auth, Realtime, and Storage)
+- Vitest
+- GitHub Actions
+- Cloudflare Workers (via Vinext)
+- Cloudflare Turnstile for bot checks (when configured)
+- Optional Twilio Verify for SMS and Upstash Redis for rate limiting
+
+The app requires Node.js 22 or newer. CI uses Node.js 24.
+
+## Project structure
+
+```text
+app/                  Routes: customer (/t/[code]), store console, auth, and APIs
+lib/data/             Data access (mock or Supabase)
+lib/ui/               Customer, store, and auth UI
+lib/supabase/         Supabase clients and customer API helpers
+supabase/             Database migrations and database tests
+tests/                Vitest unit tests
+.github/workflows/    CI workflow
+cloudflare.config.ts  Cloudflare Workers deploy config
+```
+
+## Getting started
+
+Install dependencies and start a local preview with the default mock data source. No database or real secrets are required for this mode.
 
 ```sh
 npm ci
@@ -12,62 +68,80 @@ cp .env.example .env.local
 npm run dev
 ```
 
-浏览器访问本地 3000 端口。默认 `NEXT_PUBLIC_DATA_SOURCE=mock`，首页不连接数据库；数据层由后续 PR-A 实现。切换为 `supabase` 的数据层尚未实现。无需真实密钥即可启动首页。
+Then open [http://localhost:3000](http://localhost:3000). In mock mode, the home page links to a sample table at `/t/demo-a1`, and a mock control panel is available for trying different states.
 
-## 环境变量
+`NEXT_PUBLIC_DATA_SOURCE` must be set to `mock` or `supabase`. The default in `.env.example` is `mock`. To run against a local or hosted Supabase project, set it to `supabase` and fill in the other variables from `.env.example`. A detailed local Supabase walkthrough is in [docs/local-run-windows.md](docs/local-run-windows.md).
 
-完整变量及中文说明见 [.env.example](.env.example)。本地值放在 `.env.local`，部署值通过部署平台配置。`NEXT_PUBLIC_` 变量会进入浏览器，不能填服务端密钥。`SUPABASE_SERVICE_ROLE_KEY`、`CUSTOMER_API_DATABASE_URL` 和 `TURNSTILE_SECRET_KEY` 仅限服务端使用；当前骨架不使用它们。Supabase 工厂仅在调用时读取公开 URL 和匿名密钥，缺少时会报错。
+Useful variables:
 
-## 目录结构
+- `NEXT_PUBLIC_DATA_SOURCE` — `mock` or `supabase`
+- `NEXT_PUBLIC_SITE_URL` — site origin, with no trailing slash
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and optional `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `NEXT_PUBLIC_TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`
+- `NEXT_PUBLIC_AUTH_SMS_ALLOWED_COUNTRIES` — default `MY`
+- `CUSTOMER_API_DATABASE_URL` and `CUSTOMER_DB_SSL` — required for the customer API in Supabase mode
+- `QR_SIGNING_SECRET`, `CLIENT_HASH_SECRET`, and `DEVICE_COOKIE_SECRET`
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` — rate limiting in hosted environments
+- `TWILIO_ACCOUNT_SID`, `TWILIO_VERIFY_SERVICE_SID`, and `TWILIO_AUTH_TOKEN` — SMS via Twilio Verify, when enabled
+- `TRUST_LOCAL_IP` and `LOCAL_MEMORY_RATE_LIMIT` — local development only; do not set these in hosted environments
 
-```text
-app/                       根布局、首页、全局样式
-lib/supabase/              浏览器与服务端客户端工厂
-proxy.ts                   Next.js 16 请求透传占位
-tests/                    Vitest 单元测试
-docs/                     原始设计与运维资料
-supabase/migrations/      原始数据库迁移
-supabase/tests/           原始数据库测试
-supabase/templates/       原始邮件模板
-scripts/                  原始运维脚本
-.github/workflows/ci.yml    自动检查
-```
+`NEXT_PUBLIC_` values are exposed to the browser. Keep server secrets out of those variables and out of git. A full commented list is in [`.env.example`](.env.example).
 
-`docs/`、`supabase/`、`scripts/` 从资料目录原样复制，不参与本 PR 的 ESLint、Prettier、TypeScript 或 Vitest 检查。原始数据库测试和运维脚本需要独立环境及工具，未在骨架 CI 中执行。服务端工厂支持 Cookie 适配；认证守卫与会话刷新由后续 PR 实现。
-
-## 检查命令
+Checks and production build:
 
 ```sh
 npm run lint
 npm run typecheck
 npm test
 npm run build
-npm start
-npm run format
 ```
 
-`npm start` 需要先构建；`npm run format` 只格式化本骨架文件，保留复制资料原貌。CI 依次执行安装、静态检查、单元测试和生产构建，构建使用虚假公开变量，无需密钥。
+Database tests (the second command needs a local Supabase instance):
 
-## PR 规则
+```sh
+npm run test:db:unit
+npm run test:db
+```
 
-所有变更只开 PR，是否合并由负责人决定，禁止自行合并。密钥只放环境变量，绝不进入仓库或提交信息；不提交真实服务地址、token 或任何凭据。参考资料中的公开文档链接保持原样。提交前必须通过 CI 对应的全部检查。
+## CI
 
-## PR-A 假数据预览
+On every push and pull request, GitHub Actions runs two jobs:
 
-从 `/t/demo-a1` 开始；空桌为 `/t/demo-a2`，零费率 `/t/demo-b1`，暂停接单 `/t/demo-paused`，停用店铺 `/t/demo-suspended`，无效桌码 `/t/demo-a9`。店家框架从 `/store` 进入。界面只通过 `lib/data/index.ts` 调用数据，`lib/data/types.ts` 是后续 PR 共享的追加式类型合约。
+- **check:** install dependencies, then `npm run lint`, `npm run typecheck`, and `npm test`. It builds once with `NEXT_PUBLIC_DATA_SOURCE=supabase` and checks that mock-only code is not left in the production output, then builds again with `NEXT_PUBLIC_DATA_SOURCE=mock`.
+- **database:** run `npm run test:db:unit`, start a local Supabase database, and run `npm run test:db`.
 
-`NEXT_PUBLIC_DATA_SOURCE=mock` 为默认；改成 `supabase` 后需重启或重新构建，目前会显示「未实现」，不会请求 Supabase。mock 只在浏览器运行，以 `ro-mock:` 存状态，以 `cart:{code}` 分桌保存购物车。右下「假数据」支持延迟、错误、验证码、自动推进、结账、重置桌码、过期和换手机；「重置全部假数据」会清除这些演示状态和购物车。模拟设备和令牌仅在数据层内部使用，页面无需读取。无真实账号密码。
+CI uses Node.js 24. The production build in CI uses placeholder public values, not real secrets.
 
-验证码 site key 留空时不加载外部脚本，使用勾选占位。设置公开 site key 后才按需加载官方 Turnstile；三种公开测试 key 见 `.env.example`，`VERCEL_ENV=production` 禁止测试 key。每次提交后都重置验证码；真实校验归后端负责。
+## Deployment
 
-公共组件位于 `lib/ui/common.tsx`，验证码位于 `lib/ui/captcha.tsx`，后台框架 `StoreShell` 支持 `banners` 叠放和 `newOrderCount` 角标。后续模拟项按 `lib/ui/mock-panel-a.ts`、`lib/data/mock/controls-a.ts` 的领域文件方式追加。金额和时间统一使用 `lib/format.ts`；金额只在 mock 内部计价，页面展示数据层返回值。
+The live demo is a Cloudflare Worker named `songhaw-ordering`. Production is configured to use `NEXT_PUBLIC_DATA_SOURCE=supabase`.
 
-## PR-C 认证、菜单管理和拉黑演示
+```sh
+npm run build:vinext
+npm run deploy:vinext
+```
 
-登录入口 `/login`；`/register` 不收密码或店名，邮箱验证通过「假数据 → 模拟邮箱」手动打开链接再确认；手机号验证码为 `123456`，号码仅通过 sessionStorage 传给 `/verify`，不进入网址。邮件链接 15 分钟一次有效，短信 10 分钟、错 5 次失效；验证后 5 分钟内设置密码。密码和验证码不存明文，假账号只保存 SHA-256 密码摘要；这只是浏览器演示，不能作为真实认证安全边界。
+For a local Workers-style preview, `npm run dev:vinext` serves the Vinext build on port 3001. Keep Cloudflare local secrets in `.dev.vars` and do not commit that file.
 
-仅假数据用：`owner@demo.test`（或 `012-000 0001`）、`new@demo.test`（空菜单、资料未填）、`disabled@demo.test`（只读）、`admin@demo.test`、`nostore@demo.test` 的演示密码均为 `demo-pass-123`；`nopw@demo.test` 没有密码，请用验证码流程；`unverified@demo.test` 未验证。身份组可直接切换以上状态及管理员 aal1；认证出错组设置一次性错误；模拟邮箱可标记链接过期或已用。未验证账号 24 小时后清理，也可用面板立即模拟清理。
+## AI-assisted development
 
-菜单管理 `/store/menu` 和顾客菜单 `/t/demo-a1` 共用数据；分类、菜品隐藏、排序、上传和删除会同步到顾客菜单，已下单的历史快照不变。图片仅在浏览器转为 WebP 并存本机；空间不足时提示保存或上传失败。`libphonenumber-js/max` 用于有效手机号码和国家白名单验证；排序使用原生拖放和上移/下移，无新增拖放依赖。
+This project was built with AI assistance. Song Haw specified the features and directed OpenAI Codex, which generated the code. He reviewed the output, debugged it, and acceptance-tested each feature.
 
-`/store/blocked` 只能查看和解除拉黑；「假数据 → 拉黑」可拉黑当前模拟手机或使记录全部过期，以测试 P2。PR-B 尚未合并，P5「拒单并拉黑」按钮留给后续小 PR，R9 假数据函数已提供。Supabase 分支仍全部为「未实现」占位；proxy 在 mock 放行、由客户端使用同一守卫判定表，在 supabase 因后端 PR2 尚未交付而返回中文 503 占位。未初始化任何真实认证、邮件或短信服务。
+## Status and limitations
+
+This is a prototype (version 0.1.0 in `package.json`), not a production restaurant system.
+
+- There is no online payment integration. Staff collect payment in person, then mark the bill as paid in the store console.
+- The user interface is in Simplified Chinese only.
+- Platform admin pages (`/admin/stores` and `/admin/mfa`) are still placeholders.
+- SMS is limited to the countries in `NEXT_PUBLIC_AUTH_SMS_ALLOWED_COUNTRIES` (default: Malaysia).
+- Mock demo tables such as `demo-a1` are only available when `NEXT_PUBLIC_DATA_SOURCE=mock`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## Author
+
+Lim Song Haw  
+[limsonghaw.pages.dev](https://limsonghaw.pages.dev)
