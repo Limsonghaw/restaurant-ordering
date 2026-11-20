@@ -81,6 +81,14 @@ try {
     `), [{ relrowsecurity: true }]);
   });
 
+  await check('reset keeps the empty search path and declares function-level timeouts', async () => {
+    const [{ proconfig, prosecdef }] = await rows(`
+      select proconfig, prosecdef from pg_proc where oid = 'public.reset_demo_data(text[])'::regprocedure
+    `);
+    assert.equal(prosecdef, true);
+    assert.deepEqual([...proconfig].sort(), ['lock_timeout=5s', 'search_path=""', 'statement_timeout=30s']);
+  });
+
   await check('null, empty, and blank-only whitelists fail validation', async () => {
     for (const invalid of [null, [], [null, ' \t\n ']]) {
       await assert.rejects(reset(invalid), { code: 'P0001', message: 'VALIDATION_FAILED' });
@@ -238,6 +246,16 @@ try {
     });
   }
 
+  await check('eleven unique emails fail before any cleanup or run record', async () => {
+    const beforeRuns = await rows('select * from demo_reset_runs');
+    const beforeOperations = await Promise.all(operationalTables.map((table) => rows('select * from ' + table)));
+    const emails = Array.from({ length: 11 }, (_, i) => `demo-${i}@example.invalid`);
+    await assert.rejects(reset(emails), { code: 'P0001', message: 'VALIDATION_FAILED' });
+    assert.deepEqual(await snapshot(), dirty);
+    assert.deepEqual(await Promise.all(operationalTables.map((table) => rows('select * from ' + table))), beforeOperations);
+    assert.deepEqual(await rows('select * from demo_reset_runs'), beforeRuns);
+  });
+
   await check('dirty reset restores all golden rows, clears operations and replaces scoped audit', async () => {
     const result = await reset();
     for (const table of operationalTables) assert.equal(result.deleted[table], 1, table);
@@ -287,6 +305,24 @@ try {
     assert.deepEqual(await rows('select * from store_members order by user_id'), memberships);
     assert.deepEqual(await rows('select * from auth.users order by id'), authBefore);
     assert.deepEqual(await rows('select * from profiles order by user_id'), profilesBefore);
+  });
+
+  await check('ten unique emails pass after deduplication and reset restores caller timeouts', async () => {
+    const emails = [allowedEmail, 'second@example.invalid',
+      ...Array.from({ length: 8 }, (_, i) => `demo-${i}@example.invalid`)];
+    const settings = () => rows(`
+      select current_setting('lock_timeout') as lock_timeout,
+             current_setting('statement_timeout') as statement_timeout
+    `);
+    await db.exec("set lock_timeout = '1s'; set statement_timeout = '15s'");
+    try {
+      const before = await settings();
+      const result = await reset([...emails, ' MERCHANT@EXAMPLE.INVALID ', null, ' ']);
+      assert.equal(result.owners, 2);
+      assert.deepEqual(await settings(), before);
+    } finally {
+      await db.exec('reset lock_timeout; reset statement_timeout');
+    }
   });
 } catch (error) {
   failed++;

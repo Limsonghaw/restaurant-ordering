@@ -1,0 +1,46 @@
+name: Reset demo data
+
+# Intended cron after separate approval is 0 20 * * * (04:00 Asia/Kuala_Lumpur, Malaysia time).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type reset-demo-data to confirm
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reset-demo-data
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    environment: demo-reset
+    steps:
+      - name: Check confirmation
+        env:
+          RESET_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [[ "$RESET_CONFIRM" != "reset-demo-data" ]]; then
+            echo "Confirmation must equal reset-demo-data" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Reset demo data
+        run: node scripts/reset-demo-data.mjs
+        env:
+          DEMO_SUPABASE_URL: ${{ secrets.DEMO_SUPABASE_URL }}
+          DEMO_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.DEMO_SUPABASE_SERVICE_ROLE_KEY }}
+          DEMO_ALLOWED_PROJECT_REF: ${{ secrets.DEMO_ALLOWED_PROJECT_REF }}
+          DEMO_ALLOWED_USER_EMAILS: ${{ secrets.DEMO_ALLOWED_USER_EMAILS }}
+          DEMO_QR_SIGNING_SECRET: ${{ secrets.DEMO_QR_SIGNING_SECRET }}
+          DEMO_SITE_URL: ${{ vars.DEMO_SITE_URL }}
