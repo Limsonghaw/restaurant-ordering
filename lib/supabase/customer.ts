@@ -44,7 +44,22 @@ export function customerDatabaseDiagnostic(error: unknown, rawCode: unknown) {
     return { category: "configuration", code: "missing_database_url" };
   if (error instanceof InvalidCustomerDatabaseConfiguration)
     return { category: "configuration", code: "invalid_database_url" };
-  if (typeof rawCode !== "string") return { category: "unknown" };
+  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
+  if (typeof rawCode !== "string") rawCode = cause?.code;
+  if (typeof rawCode !== "string" ||
+      (!safeTransportCodes.has(rawCode) && !/^[0-9][0-9A-Z]{4}$/.test(rawCode))) {
+    // Match known runtime errors, but never put their text in the logs.
+    const message = (error as { message?: unknown } | null)?.message;
+    if (typeof message === "string") {
+      if (/Cannot perform I\/O on behalf of a different request/i.test(message))
+        return { category: "connection", code: "cross_request_io" };
+      if (/proxy request failed, cannot connect to the specified address/i.test(message))
+        return { category: "connection", code: "worker_socket_connect_failed" };
+      if (/TLS handshake|certificate verify failed/i.test(message))
+        return { category: "connection", code: "tls_failure" };
+    }
+    return { category: "unknown" };
+  }
   if (safeTransportCodes.has(rawCode))
     return { category: "connection", code: rawCode };
   if (!/^[0-9][0-9A-Z]{4}$/.test(rawCode) || rawCode.length !== 5)
@@ -56,7 +71,7 @@ export function customerDatabaseDiagnostic(error: unknown, rawCode: unknown) {
   return { category: "database", code: rawCode };
 }
 
-export function mapCustomerError(error: unknown): AppError {
+export function mapCustomerError(error: unknown, stage?: string): AppError {
   const e = error as { code?: string; message?: string; detail?: string };
   if (e?.code === "P0001" && e.message && Object.hasOwn(ERRORS, e.message)) {
     const code = e.message as AppCode;
@@ -117,7 +132,7 @@ export function mapCustomerError(error: unknown): AppError {
     }
     return result;
   }
-  console.error("Customer database request failed", customerDatabaseDiagnostic(error, e?.code));
+  console.error("Customer database request failed", { ...customerDatabaseDiagnostic(error, e?.code), ...(stage ? { stage } : {}) });
   return new AppError("INTERNAL");
 }
 async function call<T>(
@@ -125,11 +140,15 @@ async function call<T>(
     db: ReturnType<typeof postgres>,
   ) => PromiseLike<postgres.RowList<postgres.Row[]>>,
 ): Promise<T> {
+  let stage = "initialize_client";
   try {
-    const rows = await run(database());
+    const db = database();
+    stage = "execute_query";
+    const rows = await run(db);
+    stage = "read_result";
     return rows[0].result as T;
   } catch (e) {
-    throw mapCustomerError(e);
+    throw mapCustomerError(e, stage);
   }
 }
 export const customerGetMenu = (a: TableCode) =>
