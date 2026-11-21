@@ -15,17 +15,47 @@ export function customerDatabaseSsl(url: string): "require" | false {
   return process.env.CUSTOMER_DB_SSL === "disable" && local && !isNonLocalEnv()
     ? false : "require";
 }
+class MissingCustomerDatabaseConfiguration extends Error {}
+class InvalidCustomerDatabaseConfiguration extends Error {}
+
 function database() {
-  if (!process.env.CUSTOMER_API_DATABASE_URL)
-    throw new Error("Missing database configuration");
-  return (sql ??= postgres(process.env.CUSTOMER_API_DATABASE_URL, {
+  const url = process.env.CUSTOMER_API_DATABASE_URL;
+  if (!url) throw new MissingCustomerDatabaseConfiguration();
+  const parsed = URL.parse(url);
+  if (!parsed || !["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname)
+    throw new InvalidCustomerDatabaseConfiguration();
+  return (sql ??= postgres(url, {
     max: 1,
     prepare: false,
-    ssl: customerDatabaseSsl(process.env.CUSTOMER_API_DATABASE_URL),
+    ssl: customerDatabaseSsl(url),
     idle_timeout: 20,
     connect_timeout: 5,
   }));
 }
+const safeTransportCodes = new Set([
+  "CONNECT_TIMEOUT", "CONNECTION_CLOSED", "CONNECTION_DESTROYED",
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN",
+  "ENETUNREACH", "EHOSTUNREACH", "ERR_TLS_CERT_ALTNAME_INVALID",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "CERT_HAS_EXPIRED",
+]);
+
+export function customerDatabaseDiagnostic(error: unknown, rawCode: unknown) {
+  if (error instanceof MissingCustomerDatabaseConfiguration)
+    return { category: "configuration", code: "missing_database_url" };
+  if (error instanceof InvalidCustomerDatabaseConfiguration)
+    return { category: "configuration", code: "invalid_database_url" };
+  if (typeof rawCode !== "string") return { category: "unknown" };
+  if (safeTransportCodes.has(rawCode))
+    return { category: "connection", code: rawCode };
+  if (!/^[0-9][0-9A-Z]{4}$/.test(rawCode) || rawCode.length !== 5)
+    return { category: "unknown" };
+  if (rawCode.startsWith("28"))
+    return { category: "authentication", code: rawCode };
+  if (rawCode.startsWith("08"))
+    return { category: "connection", code: rawCode };
+  return { category: "database", code: rawCode };
+}
+
 export function mapCustomerError(error: unknown): AppError {
   const e = error as { code?: string; message?: string; detail?: string };
   if (e?.code === "P0001" && e.message && Object.hasOwn(ERRORS, e.message)) {
@@ -87,9 +117,7 @@ export function mapCustomerError(error: unknown): AppError {
     }
     return result;
   }
-  console.error("Customer database request failed", {
-    code: e?.code === "57014" ? "timeout" : "unavailable",
-  });
+  console.error("Customer database request failed", customerDatabaseDiagnostic(error, e?.code));
   return new AppError("INTERNAL");
 }
 async function call<T>(
