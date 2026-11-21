@@ -10,6 +10,15 @@ The interface is in Simplified Chinese. Prices use Malaysian Ringgit (MYR), incl
 
 The hosted site runs on Cloudflare Workers and uses the Supabase data source. The home page asks you to scan a table QR code, or you can open the store console (login required).
 
+### Store console demo login
+
+[Open the demo login](https://songhaw-ordering.s020611h.workers.dev/login)
+
+- Email: `restaurantorderingdemo@gmail.com`
+- Password: `427YHT8niiZEzhp`
+
+These credentials are provided for public demo access. Use fictional information only.
+
 The in-browser mock tables such as `/t/demo-a1` work only in local mock mode, not on this hosted site.
 
 ## Features
