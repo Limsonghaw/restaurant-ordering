@@ -1,7 +1,9 @@
 name: Reset demo data
 
-# Intended cron after separate approval is 0 20 * * * (04:00 Asia/Kuala_Lumpur, Malaysia time).
+# Daily at 20:00 UTC (04:00 Asia/Kuala_Lumpur, Malaysia time).
 on:
+  schedule:
+    - cron: "0 20 * * *"
   workflow_dispatch:
     inputs:
       confirm:
@@ -22,6 +24,7 @@ jobs:
     environment: demo-reset
     steps:
       - name: Check confirmation
+        if: github.event_name == 'workflow_dispatch'
         env:
           RESET_CONFIRM: ${{ inputs.confirm }}
         run: |
