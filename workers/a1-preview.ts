@@ -1,5 +1,5 @@
 import handler from "vinext/server/fetch-handler";
-import { menuPreviewConnection } from "../lib/supabase/menu-preview-context";
+import { customerHyperdriveConnection } from "../lib/supabase/customer-hyperdrive-context";
 
 export default {
   fetch(
@@ -16,7 +16,7 @@ export default {
     ) {
       return new Response(null, { status: 404 });
     }
-    return menuPreviewConnection.run(env.HYPERDRIVE.connectionString, () =>
+    return customerHyperdriveConnection.run(env.HYPERDRIVE.connectionString, () =>
       handler.fetch(request, env, ctx),
     );
   },

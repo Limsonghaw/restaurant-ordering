@@ -1,6 +1,6 @@
 import { isNonLocalEnv } from "../env";
 import postgres from "postgres";
-import { menuPreviewConnection } from "./menu-preview-context";
+import { customerHyperdriveConnection } from "./customer-hyperdrive-context";
 import { AppError, ERRORS, type AppCode } from "../api/errors";
 import type { TableCode } from "../qr";
 import type { CartLine } from "../api/schemas";
@@ -140,13 +140,13 @@ async function call<T>(
   run: (
     db: ReturnType<typeof postgres>,
   ) => PromiseLike<postgres.RowList<postgres.Row[]>>,
-  previewConnection?: string,
+  hyperdriveConnection?: string,
 ): Promise<T> {
   let stage = "initialize_client";
-  let previewClient: ReturnType<typeof postgres> | undefined;
+  let hyperdriveClient: ReturnType<typeof postgres> | undefined;
   try {
-    const db = previewConnection
-      ? (previewClient = postgres(previewConnection, { max: 1, connect_timeout: 5 }))
+    const db = hyperdriveConnection
+      ? (hyperdriveClient = postgres(hyperdriveConnection, { max: 1, connect_timeout: 5 }))
       : database();
     stage = "execute_query";
     const rows = await run(db);
@@ -155,19 +155,20 @@ async function call<T>(
   } catch (e) {
     throw mapCustomerError(e, stage);
   } finally {
-    if (previewClient) await previewClient.end({ timeout: 1 }).catch(() => {});
+    if (hyperdriveClient) await hyperdriveClient.end({ timeout: 1 }).catch(() => {});
   }
 }
 export const customerGetMenu = (a: TableCode) =>
   call<TableMenu>(
     (db) =>
       db`select public.customer_get_menu(${a.store_id}, ${a.table_id}, ${a.qr_version}) as result`,
-    menuPreviewConnection.getStore(),
+    customerHyperdriveConnection.getStore(),
   );
 export const customerQuote = (a: TableCode, items: CartLine[]) =>
   call<CartQuote>(
     (db) =>
       db`select public.customer_quote(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${db.json(items)}) as result`,
+    customerHyperdriveConnection.getStore(),
   );
 export interface PlaceArgs extends TableCode {
   request_id: string;
@@ -202,4 +203,5 @@ export const customerGetBill = (
   call<TableBill>(
     (db) =>
       db`select public.customer_get_bill(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${token}, ${device}) as result`,
+    customerHyperdriveConnection.getStore(),
   );

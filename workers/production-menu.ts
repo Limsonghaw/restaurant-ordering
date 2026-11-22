@@ -1,5 +1,5 @@
 import handler from "vinext/server/fetch-handler";
-import { menuPreviewConnection } from "../lib/supabase/menu-preview-context";
+import { customerHyperdriveConnection } from "../lib/supabase/customer-hyperdrive-context";
 
 export default {
   fetch(
@@ -8,8 +8,12 @@ export default {
     ctx: unknown,
   ) {
     const { pathname } = new URL(request.url);
-    if (request.method === "GET" && /^\/api\/t\/[^/]+\/menu\/?$/.test(pathname)) {
-      return menuPreviewConnection.run(env.HYPERDRIVE.connectionString, () =>
+    const endpoint = /^\/api\/t\/[^/]+\/(menu|bill|quote)\/?$/.exec(pathname)?.[1];
+    if (
+      (request.method === "GET" && (endpoint === "menu" || endpoint === "bill")) ||
+      (request.method === "POST" && endpoint === "quote")
+    ) {
+      return customerHyperdriveConnection.run(env.HYPERDRIVE.connectionString, () =>
         handler.fetch(request, env, ctx),
       );
     }
