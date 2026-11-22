@@ -1,5 +1,6 @@
 import { isNonLocalEnv } from "../env";
 import postgres from "postgres";
+import { menuPreviewConnection } from "./menu-preview-context";
 import { AppError, ERRORS, type AppCode } from "../api/errors";
 import type { TableCode } from "../qr";
 import type { CartLine } from "../api/schemas";
@@ -139,22 +140,29 @@ async function call<T>(
   run: (
     db: ReturnType<typeof postgres>,
   ) => PromiseLike<postgres.RowList<postgres.Row[]>>,
+  previewConnection?: string,
 ): Promise<T> {
   let stage = "initialize_client";
+  let previewClient: ReturnType<typeof postgres> | undefined;
   try {
-    const db = database();
+    const db = previewConnection
+      ? (previewClient = postgres(previewConnection, { max: 1, connect_timeout: 5 }))
+      : database();
     stage = "execute_query";
     const rows = await run(db);
     stage = "read_result";
     return rows[0].result as T;
   } catch (e) {
     throw mapCustomerError(e, stage);
+  } finally {
+    if (previewClient) await previewClient.end({ timeout: 1 }).catch(() => {});
   }
 }
 export const customerGetMenu = (a: TableCode) =>
   call<TableMenu>(
     (db) =>
       db`select public.customer_get_menu(${a.store_id}, ${a.table_id}, ${a.qr_version}) as result`,
+    menuPreviewConnection.getStore(),
   );
 export const customerQuote = (a: TableCode, items: CartLine[]) =>
   call<CartQuote>(

@@ -1,9 +1,13 @@
 import { bindings, defineConfig, defineWorker } from "cf/config";
 
+const preview = process.env.RESTAURANT_A1_HYPERDRIVE_ID;
+
 export default defineConfig({
   worker: defineWorker({
-    name: "songhaw-ordering",
-    entrypoint: "vinext/server/fetch-handler",
+    name: preview ? "restaurant-a1-app-preview" : "songhaw-ordering",
+    entrypoint: preview
+      ? "./workers/a1-preview.ts"
+      : "vinext/server/fetch-handler",
     compatibilityDate: "2026-11-16",
     assets: {
       htmlHandling: "none",
@@ -11,6 +15,7 @@ export default defineConfig({
       runWorkerFirst: ["/*", "!/_next/static/*", "!/*/_next/static/*"],
     },
     env: {
+      ...(preview ? { HYPERDRIVE: bindings.hyperdrive({ id: preview }) } : {}),
       ASSETS: bindings.assets(),
       CUSTOMER_DB_SSL: bindings.text("require"),
       DEPLOYMENT_PLATFORM: bindings.text("cloudflare"),
@@ -18,10 +23,10 @@ export default defineConfig({
       NEXT_PUBLIC_AUTH_SMS_ALLOWED_COUNTRIES: bindings.text("MY"),
       NEXT_PUBLIC_DATA_SOURCE: bindings.text("supabase"),
       NEXT_PUBLIC_SITE_URL: bindings.text(
-        "https://songhaw-ordering.s020611h.workers.dev"
+        "https://songhaw-ordering.s020611h.workers.dev",
       ),
       NEXT_PUBLIC_SUPABASE_URL: bindings.text(
-        "https://rdhnbiualjuujveawfxb.supabase.co"
+        "https://rdhnbiualjuujveawfxb.supabase.co",
       ),
       NODE_ENV: bindings.text("production"),
     },
