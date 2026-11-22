@@ -1,13 +1,22 @@
 import { bindings, defineConfig, defineWorker } from "cf/config";
 
 const preview = process.env.RESTAURANT_A1_HYPERDRIVE_ID;
+const productionMenu = process.env.RESTAURANT_MENU_HYPERDRIVE_ID;
+
+if (preview && productionMenu) {
+  throw new Error("Select either the A1 preview or the production menu binding.");
+}
+
+const menuHyperdrive = preview || productionMenu;
 
 export default defineConfig({
   worker: defineWorker({
     name: preview ? "restaurant-a1-app-preview" : "songhaw-ordering",
     entrypoint: preview
       ? "./workers/a1-preview.ts"
-      : "vinext/server/fetch-handler",
+      : productionMenu
+        ? "./workers/production-menu.ts"
+        : "vinext/server/fetch-handler",
     compatibilityDate: "2026-11-16",
     assets: {
       htmlHandling: "none",
@@ -15,7 +24,9 @@ export default defineConfig({
       runWorkerFirst: ["/*", "!/_next/static/*", "!/*/_next/static/*"],
     },
     env: {
-      ...(preview ? { HYPERDRIVE: bindings.hyperdrive({ id: preview }) } : {}),
+      ...(menuHyperdrive
+        ? { HYPERDRIVE: bindings.hyperdrive({ id: menuHyperdrive }) }
+        : {}),
       ASSETS: bindings.assets(),
       CUSTOMER_DB_SSL: bindings.text("require"),
       DEPLOYMENT_PLATFORM: bindings.text("cloudflare"),
