@@ -72,7 +72,11 @@ export function customerDatabaseDiagnostic(error: unknown, rawCode: unknown) {
   return { category: "database", code: rawCode };
 }
 
-export function mapCustomerError(error: unknown, stage?: string): AppError {
+export function mapCustomerError(
+  error: unknown,
+  stage?: string,
+  operation?: "check_replay" | "place_order",
+): AppError {
   const e = error as { code?: string; message?: string; detail?: string };
   if (e?.code === "P0001" && e.message && Object.hasOwn(ERRORS, e.message)) {
     const code = e.message as AppCode;
@@ -133,7 +137,11 @@ export function mapCustomerError(error: unknown, stage?: string): AppError {
     }
     return result;
   }
-  console.error("Customer database request failed", { ...customerDatabaseDiagnostic(error, e?.code), ...(stage ? { stage } : {}) });
+  console.error("Customer database request failed", {
+    ...customerDatabaseDiagnostic(error, e?.code),
+    ...(stage ? { stage } : {}),
+    ...(operation ? { operation } : {}),
+  });
   return new AppError("INTERNAL");
 }
 async function call<T>(
@@ -141,6 +149,7 @@ async function call<T>(
     db: ReturnType<typeof postgres>,
   ) => PromiseLike<postgres.RowList<postgres.Row[]>>,
   hyperdriveConnection?: string,
+  operation?: "check_replay" | "place_order",
 ): Promise<T> {
   let stage = "initialize_client";
   let hyperdriveClient: ReturnType<typeof postgres> | undefined;
@@ -153,7 +162,7 @@ async function call<T>(
     stage = "read_result";
     return rows[0].result as T;
   } catch (e) {
-    throw mapCustomerError(e, stage);
+    throw mapCustomerError(e, stage, operation);
   } finally {
     if (hyperdriveClient) await hyperdriveClient.end({ timeout: 1 }).catch(() => {});
   }
@@ -184,7 +193,11 @@ function placeQuery(db: ReturnType<typeof postgres>, a: PlaceArgs) {
   return db`select public.customer_place_order(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${db.json(a.items)}, ${a.device_hash}, ${a.ip_hash}, ${a.bill_token_hash}, ${a.new_bill_token_hash}, ${a.captcha_verified}) as result`;
 }
 export const customerPlaceOrder = (a: PlaceArgs) =>
-  call<PlaceOrderResult>((db) => placeQuery(db, a));
+  call<PlaceOrderResult>(
+    (db) => placeQuery(db, a),
+    customerHyperdriveConnection.getStore(),
+    "place_order",
+  );
 
 export type ReplayCheck =
   | { status: "replay" }
@@ -192,8 +205,10 @@ export type ReplayCheck =
   | { status: "missing" };
 export const customerCheckReplay = (a: Pick<PlaceArgs,
   "store_id" | "table_id" | "qr_version" | "request_id" | "request_hash" | "device_hash"
->) => call<ReplayCheck>((db) =>
-  db`select public.customer_check_replay(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${a.device_hash}) as result`
+>) => call<ReplayCheck>(
+  (db) => db`select public.customer_check_replay(${a.store_id}, ${a.table_id}, ${a.qr_version}, ${a.request_id}, ${a.request_hash}, ${a.device_hash}) as result`,
+  customerHyperdriveConnection.getStore(),
+  "check_replay",
 );
 export const customerGetBill = (
   a: TableCode,
