@@ -2,9 +2,10 @@ import { bindings, defineConfig, defineWorker } from "cf/config";
 
 const preview = process.env.RESTAURANT_A1_HYPERDRIVE_ID;
 const productionMenu = process.env.RESTAURANT_MENU_HYPERDRIVE_ID;
+const productionOrders = process.env.RESTAURANT_ORDER_HYPERDRIVE_ID;
 
-if (preview && productionMenu) {
-  throw new Error("Select either the A1 preview or the production menu binding.");
+if (preview && (productionMenu || productionOrders)) {
+  throw new Error("The A1 preview cannot use production Hyperdrive bindings.");
 }
 
 const menuHyperdrive = preview || productionMenu;
@@ -14,7 +15,7 @@ export default defineConfig({
     name: preview ? "restaurant-a1-app-preview" : "songhaw-ordering",
     entrypoint: preview
       ? "./workers/a1-preview.ts"
-      : productionMenu
+      : productionMenu || productionOrders
         ? "./workers/production-menu.ts"
         : "vinext/server/fetch-handler",
     compatibilityDate: "2026-11-16",
@@ -26,6 +27,9 @@ export default defineConfig({
     env: {
       ...(menuHyperdrive
         ? { HYPERDRIVE: bindings.hyperdrive({ id: menuHyperdrive }) }
+        : {}),
+      ...(productionOrders
+        ? { ORDER_HYPERDRIVE: bindings.hyperdrive({ id: productionOrders }) }
         : {}),
       ASSETS: bindings.assets(),
       CUSTOMER_DB_SSL: bindings.text("require"),
