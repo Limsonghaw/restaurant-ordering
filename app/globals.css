@@ -621,6 +621,16 @@ textarea:focus {
     border-radius: 20px 20px 0 0;
     padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
   }
+  .order-confirm-modal {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(400px, calc(100% - 32px));
+    max-width: none;
+    max-height: calc(100dvh - 32px);
+    border-radius: 20px;
+    padding: 20px;
+  }
   .store-sidebar {
     display: none;
   }
@@ -882,7 +892,12 @@ label:has(.upload-input):focus-within {
 .d-qr { break-inside: avoid; overflow-wrap: anywhere; text-align: center; }
 /* Print content is a direct body portal, outside the modal/top layer. */
 .d-print, .d-download-canvas { display: none; }
-.d-qr svg { width: min(100%, 256px); height: auto; }
+.d-qr > svg {
+  display: block;
+  width: min(100%, 256px);
+  height: auto;
+  margin-inline: auto;
+}
 .d-settings { max-width: 640px; margin: 20px auto; }
 .d-strike, .d-cancelled .d-order-money { text-decoration: line-through; }
 .d-history-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 12px 0; }

@@ -59,10 +59,12 @@ export function Modal({
   title,
   children,
   onClose,
+  className,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -91,7 +93,7 @@ export function Modal({
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={className ? `modal ${className}` : "modal"}
       aria-labelledby={id}
       onCancel={(e) => {
         e.preventDefault();
