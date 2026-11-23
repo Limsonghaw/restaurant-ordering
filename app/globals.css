@@ -892,7 +892,12 @@ label:has(.upload-input):focus-within {
 .d-qr { break-inside: avoid; overflow-wrap: anywhere; text-align: center; }
 /* Print content is a direct body portal, outside the modal/top layer. */
 .d-print, .d-download-canvas { display: none; }
-.d-qr svg { width: min(100%, 256px); height: auto; }
+.d-qr > svg {
+  display: block;
+  width: min(100%, 256px);
+  height: auto;
+  margin-inline: auto;
+}
 .d-settings { max-width: 640px; margin: 20px auto; }
 .d-strike, .d-cancelled .d-order-money { text-decoration: line-through; }
 .d-history-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 12px 0; }
