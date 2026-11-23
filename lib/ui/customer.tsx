@@ -893,6 +893,7 @@ export function CartPage({ code }: { code: string }) {
       )}
       {confirm && (
         <Modal
+          className="order-confirm-modal"
           title={`确认下单到 ${menu.table.label} 桌？`}
           onClose={closeConfirm}
         >

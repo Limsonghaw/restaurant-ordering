@@ -621,6 +621,16 @@ textarea:focus {
     border-radius: 20px 20px 0 0;
     padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
   }
+  .order-confirm-modal {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(400px, calc(100% - 32px));
+    max-width: none;
+    max-height: calc(100dvh - 32px);
+    border-radius: 20px;
+    padding: 20px;
+  }
   .store-sidebar {
     display: none;
   }
